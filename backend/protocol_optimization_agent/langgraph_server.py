@@ -1,32 +1,39 @@
 from __future__ import annotations
 
-import json
 import os
-import re
-import uuid
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.runnables import Runnable
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt import InjectedState, ToolNode
 
 from protocol_optimization_agent.query_engine import ProtocolQueryEngine
 
 
 DEFAULT_OUTPUT_DIR = "runs/protocol_analysis_agent_simplified_autofeatures"
 
+SYSTEM_PROMPT = """You are ProtocolOptimizationAgent, a tool-using scientific protocol analysis assistant.
+
+You answer only from the generated Protocol Analysis Agent outputs exposed by tools. Do not re-read papers, invent protocol facts, or use memory as evidence. For protocol comparison questions, first resolve protocol names with find_protocols, then call compare_protocols, and call evidence tools when a claim needs support.
+
+When answering, summarize the tool results in clear scientific language and include the relevant protocol ids, feature names, evidence/provenance availability, confidence or audit caveats when present. Correlation or protocol-design differences must not be presented as causal claims.
+
+The LangGraph UI will display tool calls. You may briefly state what tool you are using, but do not reveal private chain-of-thought. Provide concise evidence-grounded reasoning summaries instead.
+
+Runtime context:
+- output_dir: {output_dir}
+- max_features: {max_features}
+"""
+
 
 class ProtocolChatState(TypedDict, total=False):
     messages: Annotated[list[BaseMessage], add_messages]
     output_dir: str
     max_features: int
-    intent: str
-    query_parts: list[str]
-    compared: bool
-    ready_to_answer: bool
 
 
 def _output_dir(value: str | None = None) -> str:
@@ -38,50 +45,76 @@ def _engine(output_dir: str | None = None) -> ProtocolQueryEngine:
 
 
 @tool
-def find_protocols(query: str, output_dir: str = "") -> list[dict[str, Any]]:
+def find_protocols(query: str, output_dir: Annotated[str, InjectedState("output_dir")]) -> list[dict[str, Any]]:
     """Find protocols by natural-language query, author/year, paper id, dataset id, or protocol name."""
 
     return _engine(output_dir).find_protocols(query)
 
 
 @tool
-def compare_protocols(protocol_id_a: str, protocol_id_b: str, output_dir: str = "", max_features: int = 40) -> dict[str, Any]:
-    """Compare two protocols using the generated feature matrix, normalized events, semantic annotations, and provenance."""
+def compare_protocols(
+    protocol_id_a: str,
+    protocol_id_b: str,
+    output_dir: Annotated[str, InjectedState("output_dir")],
+    max_features: Annotated[int, InjectedState("max_features")],
+) -> dict[str, Any]:
+    """Compare two protocols using feature matrix, normalized events, semantic annotations, and provenance."""
 
     return _engine(output_dir).compare_protocols(protocol_id_a, protocol_id_b, max_features=max_features)
 
 
 @tool
-def get_protocol_events(protocol_id: str, output_dir: str = "", limit: int = 100) -> list[dict[str, Any]]:
+def get_protocol_events(
+    protocol_id: str,
+    output_dir: Annotated[str, InjectedState("output_dir")],
+    limit: int = 100,
+) -> list[dict[str, Any]]:
     """Return normalized factor/action events for one protocol."""
 
     return _engine(output_dir).get_protocol_events(protocol_id, limit=limit)
 
 
 @tool
-def get_feature_evidence(protocol_id: str, feature: str, output_dir: str = "") -> list[dict[str, Any]]:
+def get_feature_evidence(
+    protocol_id: str,
+    feature: str,
+    output_dir: Annotated[str, InjectedState("output_dir")],
+) -> list[dict[str, Any]]:
     """Return evidence/provenance records for one protocol feature."""
 
     return _engine(output_dir).get_evidence_for_feature(protocol_id, feature)
 
 
 @tool
-def query_matrix(filters: dict[str, Any] | None = None, columns: list[str] | None = None, output_dir: str = "", limit: int = 50) -> list[dict[str, Any]]:
+def query_matrix(
+    output_dir: Annotated[str, InjectedState("output_dir")],
+    filters: dict[str, Any] | None = None,
+    columns: list[str] | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
     """Query rows and columns from protocol_feature_matrix.csv."""
 
     return _engine(output_dir).query_matrix(filters=filters or {}, columns=columns, limit=limit)
 
 
 @tool
-def explain_cell(protocol_id: str, feature: str, output_dir: str = "") -> dict[str, Any]:
-    """Explain one matrix cell with value and provenance."""
+def explain_cell(
+    protocol_id: str,
+    feature: str,
+    output_dir: Annotated[str, InjectedState("output_dir")],
+) -> dict[str, Any]:
+    """Explain one matrix cell with value and full provenance."""
 
     return _engine(output_dir).explain_cell(protocol_id, feature)
 
 
 @tool
-def propose_feature_specs_context(protocol_ids: list[str] | None = None, output_dir: str = "", limit_events: int = 200) -> dict[str, Any]:
-    """Return source-grounded context for proposing FeatureSpec candidates; this tool does not create final matrix values."""
+def propose_feature_specs_context(
+    output_dir: Annotated[str, InjectedState("output_dir")],
+    protocol_ids: list[str] | None = None,
+    limit_events: int = 200,
+) -> dict[str, Any]:
+    """Return source-grounded context for proposing FeatureSpec candidates; does not create final matrix values."""
 
     return _engine(output_dir).propose_feature_specs_context(protocol_ids=protocol_ids or [], limit_events=limit_events)
 
@@ -97,18 +130,17 @@ TOOLS = [
 ]
 
 
-def build_protocol_chat_graph(compile_graph: bool = True) -> Any:
+def build_protocol_chat_graph(chat_model: Runnable | None = None, compile_graph: bool = True) -> Any:
+    bound_model = _bind_tools(chat_model or _build_chat_model_from_env())
     graph = StateGraph(ProtocolChatState)
     graph.add_node("configure", _configure_node)
-    graph.add_node("planner", _planner_node)
+    graph.add_node("agent", _agent_node(bound_model))
     graph.add_node("tools", ToolNode(TOOLS))
-    graph.add_node("answer", _answer_node)
 
     graph.add_edge(START, "configure")
-    graph.add_edge("configure", "planner")
-    graph.add_conditional_edges("planner", _route_after_planner, {"tools": "tools", "answer": "answer"})
-    graph.add_edge("tools", "planner")
-    graph.add_edge("answer", END)
+    graph.add_edge("configure", "agent")
+    graph.add_conditional_edges("agent", _route_after_agent, {"tools": "tools", "end": END})
+    graph.add_edge("tools", "agent")
     return graph.compile() if compile_graph else graph
 
 
@@ -120,225 +152,84 @@ def _configure_node(state: ProtocolChatState) -> ProtocolChatState:
     }
 
 
-def _planner_node(state: ProtocolChatState) -> ProtocolChatState:
-    if state.get("ready_to_answer"):
-        return state
-    messages = state.get("messages", [])
-    question = _last_human_text(messages)
-    output_dir = _output_dir(state.get("output_dir"))
-
-    if state.get("intent") == "compare_protocols" and not state.get("compared"):
-        protocol_ids = _protocol_ids_from_recent_find_tools(messages)
-        if len(protocol_ids) >= 2:
+def _agent_node(model: Runnable | None):
+    def run(state: ProtocolChatState) -> ProtocolChatState:
+        if model is None:
             return {
                 **state,
-                "compared": True,
                 "messages": [
                     AIMessage(
-                        content="I found the requested protocols and will compare their structured feature profiles.",
-                        tool_calls=[
-                            {
-                                "name": "compare_protocols",
-                                "args": {
-                                    "protocol_id_a": protocol_ids[0],
-                                    "protocol_id_b": protocol_ids[1],
-                                    "output_dir": output_dir,
-                                    "max_features": int(state.get("max_features") or 40),
-                                },
-                                "id": _tool_call_id(),
-                            }
-                        ],
+                        content=(
+                            "Chat LLM is not configured. Set PROTOCOL_CHAT_LLM_PROVIDER, "
+                            "PROTOCOL_CHAT_MODEL, PROTOCOL_CHAT_API_KEY_ENV, and the referenced API key environment variable."
+                        )
                     )
                 ],
             }
-        return {**state, "ready_to_answer": True}
-
-    if state.get("compared"):
-        return {**state, "ready_to_answer": True}
-
-    if _looks_like_cell_explanation(question):
-        protocol_id, feature = _parse_cell_question(question)
-        return {
-            **state,
-            "intent": "explain_cell",
-            "messages": [
-                AIMessage(
-                    content="I will explain that matrix cell from the generated value and provenance.",
-                    tool_calls=[
-                        {
-                            "name": "explain_cell",
-                            "args": {"protocol_id": protocol_id, "feature": feature, "output_dir": output_dir},
-                            "id": _tool_call_id(),
-                        }
-                    ],
-                )
-            ],
-        }
-
-    query_parts = _split_comparison_question(question)
-    if len(query_parts) >= 2:
-        return {
-            **state,
-            "intent": "compare_protocols",
-            "query_parts": query_parts[:2],
-            "messages": [
-                AIMessage(
-                    content="I will resolve both protocol names against the generated Protocol Analysis outputs.",
-                    tool_calls=[
-                        {"name": "find_protocols", "args": {"query": query_parts[0], "output_dir": output_dir}, "id": _tool_call_id()},
-                        {"name": "find_protocols", "args": {"query": query_parts[1], "output_dir": output_dir}, "id": _tool_call_id()},
-                    ],
-                )
-            ],
-        }
-
-    return {
-        **state,
-        "intent": "find_protocols",
-        "ready_to_answer": True,
-        "messages": [
-            AIMessage(
-                content="I will search the generated Protocol Analysis outputs for matching protocols.",
-                tool_calls=[{"name": "find_protocols", "args": {"query": question, "output_dir": output_dir}, "id": _tool_call_id()}],
+        system = SystemMessage(
+            content=SYSTEM_PROMPT.format(
+                output_dir=_output_dir(state.get("output_dir")),
+                max_features=int(state.get("max_features") or 40),
             )
-        ],
-    }
+        )
+        response = model.invoke([system, *state.get("messages", [])])
+        return {**state, "messages": [response]}
+
+    return run
 
 
-def _route_after_planner(state: ProtocolChatState) -> Literal["tools", "answer"]:
+def _route_after_agent(state: ProtocolChatState) -> Literal["tools", "end"]:
     messages = state.get("messages", [])
-    if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
+    last = messages[-1] if messages else None
+    if isinstance(last, AIMessage) and last.tool_calls:
         return "tools"
-    return "answer"
+    return "end"
 
 
-def _answer_node(state: ProtocolChatState) -> ProtocolChatState:
-    messages = state.get("messages", [])
-    tool_messages = [message for message in messages if isinstance(message, ToolMessage)]
-    content = _format_answer(state, tool_messages)
-    return {**state, "messages": [AIMessage(content=content)]}
+def _bind_tools(model: Runnable | None) -> Runnable | None:
+    if model is None:
+        return None
+    bind_tools = getattr(model, "bind_tools", None)
+    if callable(bind_tools):
+        return bind_tools(TOOLS)
+    return model
 
 
-def _format_answer(state: ProtocolChatState, tool_messages: list[ToolMessage]) -> str:
-    if not tool_messages:
-        return "没有可用的工具结果。请先运行 Protocol Analysis Agent，并确认 output_dir 指向对应 runs 目录。"
-    last_payload = _tool_payload(tool_messages[-1])
-    intent = state.get("intent", "")
-    if intent == "compare_protocols" and isinstance(last_payload, dict) and last_payload.get("status") == "ok":
-        return _format_comparison_answer(last_payload)
-    if intent == "explain_cell" and isinstance(last_payload, dict):
-        return _format_cell_answer(last_payload)
-    if intent == "find_protocols":
-        payload = _tool_payload(tool_messages[-1])
-        count = len(payload) if isinstance(payload, list) else 0
-        lines = [f"找到 {count} 个候选 protocol。"]
-        if isinstance(payload, list):
-            for item in payload[:10]:
-                lines.append(f"- `{item.get('protocol_id', '')}` | {item.get('paper_id', '')} | {item.get('protocol_name', '')}")
-        return "\n".join(lines)
-    return "工具结果已返回：\n\n```json\n" + json.dumps(last_payload, ensure_ascii=False, indent=2)[:6000] + "\n```"
+def _build_chat_model_from_env() -> Runnable | None:
+    provider = os.getenv("PROTOCOL_CHAT_LLM_PROVIDER")
+    if not provider and os.getenv("DEEPSEEK_API_KEY"):
+        provider = "deepseek"
+    if not provider and os.getenv("OPENAI_API_KEY"):
+        provider = "openai"
+    provider = (provider or "").lower()
+    if not provider:
+        return None
 
+    if provider not in {"openai", "openai_compatible", "deepseek"}:
+        raise ValueError(f"Unsupported PROTOCOL_CHAT_LLM_PROVIDER: {provider}")
 
-def _format_comparison_answer(comparison: dict[str, Any]) -> str:
-    a = comparison.get("protocol_a", {}).get("metadata", {})
-    b = comparison.get("protocol_b", {}).get("metadata", {})
-    lines = [
-        "两者的结构化比较已基于本地 `protocol_feature_matrix.csv`、normalized events 和 provenance 生成。",
-        f"- Protocol A: `{comparison.get('protocol_a', {}).get('protocol_id', '')}` | {a.get('paper_id', '')} | {a.get('protocol_name', '')}",
-        f"- Protocol B: `{comparison.get('protocol_b', {}).get('protocol_id', '')}` | {b.get('paper_id', '')} | {b.get('protocol_name', '')}",
-    ]
-    grouped = comparison.get("grouped_feature_differences", {})
-    for group, title in (
-        ("strategy_module", "分化策略模块"),
-        ("culture_system", "培养体系"),
-        ("core_signaling_family", "核心 signaling / reagent"),
-        ("workflow", "流程操作"),
-        ("timing_or_exposure", "时间与暴露窗口"),
-        ("concentration", "浓度"),
-    ):
-        items = grouped.get(group, [])
-        if not items:
-            continue
-        lines.append(f"\n{title}:")
-        for item in items[:6]:
-            lines.append(f"- `{item.get('feature')}`: A=`{item.get('protocol_a_value')}`; B=`{item.get('protocol_b_value')}`")
-    relationship = comparison.get("relationship", {})
-    if relationship:
-        lines.append(f"\nBinary feature Jaccard similarity: `{relationship.get('binary_feature_jaccard_similarity', '')}`")
-    lines.append("\n注意：以上是结构化 protocol 特征差异，不直接解释为因果结论。")
-    return "\n".join(lines)
+    from langchain_openai import ChatOpenAI
 
+    api_key_env = os.getenv("PROTOCOL_CHAT_API_KEY_ENV") or ("DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY")
+    api_key = os.getenv(api_key_env)
+    if not api_key:
+        raise RuntimeError(f"Missing chat LLM API key environment variable: {api_key_env}")
 
-def _format_cell_answer(payload: dict[str, Any]) -> str:
-    lines = [
-        f"`{payload.get('protocol_id', '')}` 的 `{payload.get('feature', '')}` = `{payload.get('value', '')}`",
-        f"provenance items: {payload.get('n_evidence_items', 0)}",
-    ]
-    for item in payload.get("evidence", [])[:5]:
-        lines.append(f"- stage/event: `{item.get('entity_id') or item.get('event_id') or item.get('stage_id', '')}`; quote: {item.get('quote', '')[:300]}")
-    return "\n".join(lines)
+    model = os.getenv("PROTOCOL_CHAT_MODEL") or ("deepseek-chat" if provider == "deepseek" else "gpt-4o-mini")
+    base_url = os.getenv("PROTOCOL_CHAT_BASE_URL") or ("https://api.deepseek.com" if provider == "deepseek" else None)
+    temperature = float(os.getenv("PROTOCOL_CHAT_TEMPERATURE") or 0)
+    timeout = float(os.getenv("PROTOCOL_CHAT_TIMEOUT_SECONDS") or 60)
 
-
-def _last_human_text(messages: list[BaseMessage]) -> str:
-    for message in reversed(messages):
-        if isinstance(message, HumanMessage):
-            return str(message.content)
-    return ""
-
-
-def _tool_payload(message: ToolMessage) -> Any:
-    content = message.content
-    if isinstance(content, str):
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return content
-    return content
-
-
-def _protocol_ids_from_recent_find_tools(messages: list[BaseMessage]) -> list[str]:
-    protocol_ids: list[str] = []
-    for message in reversed(messages):
-        if isinstance(message, HumanMessage):
-            break
-        if not isinstance(message, ToolMessage) or message.name != "find_protocols":
-            continue
-        payload = _tool_payload(message)
-        if isinstance(payload, list) and payload:
-            protocol_id = str(payload[0].get("protocol_id") or "")
-            if protocol_id:
-                protocol_ids.append(protocol_id)
-    return list(reversed(protocol_ids))[:2]
-
-
-def _split_comparison_question(question: str) -> list[str]:
-    text = question.strip()
-    for separator in (" vs ", " versus ", " 和 ", " 与 ", " and "):
-        if separator in text.lower() or separator in text:
-            parts = text.split(separator.strip()) if separator.strip() in {"和", "与"} else re.split(re.escape(separator), text, flags=re.IGNORECASE)
-            cleaned = [_clean_query_part(part) for part in parts if _clean_query_part(part)]
-            if len(cleaned) >= 2:
-                return cleaned[:2]
-    return []
-
-
-def _clean_query_part(value: str) -> str:
-    value = re.sub(r"(protocols?|有什么区别|有何区别|区别|compare|difference|differences|between|what|are|the|和|与)", " ", value, flags=re.IGNORECASE)
-    return " ".join(value.replace("？", " ").replace("?", " ").split())
-
-
-def _looks_like_cell_explanation(question: str) -> bool:
-    return "explain_cell" in question or ("feature" in question.lower() and "protocol" in question.lower())
-
-
-def _parse_cell_question(question: str) -> tuple[str, str]:
-    protocol_match = re.search(r"(protocol_[a-zA-Z0-9_]+)", question)
-    feature_match = re.search(r"feature[:= ]+([a-zA-Z0-9_]+)", question)
-    return (protocol_match.group(1) if protocol_match else "", feature_match.group(1) if feature_match else "")
-
-
-def _tool_call_id() -> str:
-    return "call_" + uuid.uuid4().hex[:12]
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "api_key": api_key,
+        "temperature": temperature,
+        "timeout": timeout,
+        "streaming": True,
+    }
+    if base_url:
+        kwargs["base_url"] = base_url
+    return ChatOpenAI(**kwargs)
 
 
 graph = build_protocol_chat_graph()

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
 from protocol_optimization_agent.langgraph_server import build_protocol_chat_graph
@@ -62,7 +63,34 @@ def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:
         },
     ).run(records, events, [])
 
-    graph = build_protocol_chat_graph()
+    class ToolCallingFakeModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools):
+            return self
+
+    fake_model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "find_protocols", "args": {"query": "Protocol A"}, "id": "call_find_a"},
+                    {"name": "find_protocols", "args": {"query": "Protocol B"}, "id": "call_find_b"},
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "compare_protocols",
+                        "args": {"protocol_id_a": "p1", "protocol_id_b": "p2"},
+                        "id": "call_compare",
+                    }
+                ],
+            ),
+            AIMessage(content="结构化比较：Protocol A 和 Protocol B 的差异已基于工具结果总结。"),
+        ]
+    )
+
+    graph = build_protocol_chat_graph(chat_model=fake_model)
     result = graph.invoke(
         {
             "messages": [HumanMessage(content="Protocol A 和 Protocol B protocols 有什么区别？")],
