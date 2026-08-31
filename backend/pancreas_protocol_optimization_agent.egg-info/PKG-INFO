@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: pancreas-protocol-optimization-agent
+Version: 0.1.0
+Summary: ProtocolOptimizationAgent framework for integrating Agent1 protocol artifacts with h5ad single-cell phenotype analyses.
+Requires-Python: >=3.10
+Requires-Dist: fastapi>=0.110
+Requires-Dist: langchain-core>=0.3
+Requires-Dist: langgraph>=0.2
+Requires-Dist: pydantic>=2.0
+Requires-Dist: uvicorn>=0.27
+Provides-Extra: h5ad
+Requires-Dist: anndata>=0.10; extra == "h5ad"
+Requires-Dist: scanpy>=1.10; extra == "h5ad"
+Requires-Dist: pandas>=2.0; extra == "h5ad"
+Provides-Extra: dev
+Requires-Dist: ipython>=8.0; extra == "dev"
+Requires-Dist: langgraph-cli[inmem]>=0.3; extra == "dev"
+Requires-Dist: pytest>=8.0; extra == "dev"

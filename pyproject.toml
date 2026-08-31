@@ -1,0 +1,40 @@
+[project]
+name = "pancreas-protocol-optimization-agent"
+version = "0.1.0"
+description = "ProtocolOptimizationAgent framework for integrating Agent1 protocol artifacts with h5ad single-cell phenotype analyses."
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.110",
+  "langchain-core>=0.3",
+  "langgraph>=0.2",
+  "pydantic>=2.0",
+  "uvicorn>=0.27",
+]
+
+[project.optional-dependencies]
+h5ad = [
+  "anndata>=0.10",
+  "scanpy>=1.10",
+  "pandas>=2.0",
+]
+dev = [
+  "ipython>=8.0",
+  "langgraph-cli[inmem]>=0.3",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+protocol-optimization-agent = "protocol_optimization_agent.cli:main"
+protocol-analysis-agent = "protocol_optimization_agent.protocol_analysis_cli:main"
+protocol-query = "protocol_optimization_agent.protocol_query_cli:main"
+protocol-api = "protocol_optimization_agent.api:main"
+
+[tool.setuptools.package-dir]
+"" = "backend"
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]

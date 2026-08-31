@@ -1,0 +1,49 @@
+{
+  "input_dir": "data/input",
+  "output_dir": "runs/protocol_optimization_agent_run",
+  "required_inputs": {
+    "protocol_artifacts_jsonl": "protocol_artifacts.jsonl",
+    "protocol_factor_events_csv": "protocol_factor_events.csv",
+    "protocol_database_sqlite": "protocol_database.sqlite",
+    "lineage_candidate_edges_csv": "lineage_candidate_edges.csv",
+    "protocol_evidence_coverage_csv": "protocol_evidence_coverage.csv",
+    "protocol_h5ad_manifest_csv": "protocol_h5ad_manifest.csv"
+  },
+  "quality_filters": {
+    "min_protocol_confidence": 0.65,
+    "require_comparison_ready": true,
+    "allow_schema_invalid_events": false,
+    "base_feature_registry_path": "configs/base_feature_registry.json",
+    "approved_feature_registry_path": "configs/approved_feature_registry.json",
+    "max_llm_feature_discovery_protocols": 0,
+    "exclude_validation_flags": [
+      "missing_stage_timing",
+      "ambiguous_protocol_identity",
+      "low_evidence_coverage"
+    ]
+  },
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "base_url": "https://api.deepseek.com",
+    "timeout_seconds": 60
+  },
+  "h5ad": {
+    "annotation_cell_type_column": "cell_type",
+    "sample_column": "sample_id",
+    "condition_column": "condition_id",
+    "dataset_column": "dataset_id",
+    "protocol_column": "protocol_id",
+    "batch_column": "batch_id"
+  },
+  "optimization_objective": {
+    "primary": "increase_beta_like_maturity",
+    "secondary": [
+      "increase_endocrine_efficiency",
+      "increase_similarity_to_primary_islets",
+      "reduce_off_target_differentiation",
+      "improve_reproducibility"
+    ]
+  }
+}

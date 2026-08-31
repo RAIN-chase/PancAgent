@@ -1,0 +1,15 @@
+fastapi>=0.110
+langchain-core>=0.3
+langgraph>=0.2
+pydantic>=2.0
+uvicorn>=0.27
+
+[dev]
+ipython>=8.0
+langgraph-cli[inmem]>=0.3
+pytest>=8.0
+
+[h5ad]
+anndata>=0.10
+scanpy>=1.10
+pandas>=2.0

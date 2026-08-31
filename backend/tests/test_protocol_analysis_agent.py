@@ -1,0 +1,611 @@
+from __future__ import annotations
+
+import csv
+import json
+from pathlib import Path
+
+from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
+from protocol_optimization_agent.llm_client import StaticMockLLMClient
+from protocol_optimization_agent.query_engine import ProtocolQueryEngine
+
+
+def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 2},
+            "stages": [
+                {"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "day_start": 0, "day_end": 3},
+                {"stage_id": "s2", "stage_index": 2, "stage_name": "Stage 2", "day_start": 3, "day_end": 7},
+            ],
+        },
+        {
+            "protocol_id": "p2",
+            "paper_id": "paper_b",
+            "comparison_ready": False,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p2", "protocol_name": "Protocol B", "number_of_stages": 1},
+            "stages": [],
+        },
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "dataset_id": "d1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "day_start": "0",
+            "day_end": "3",
+            "duration_days": "3",
+            "factor_type": "reagent",
+            "factor_name": "Activin A",
+            "standardized_name": "Activin A",
+            "concentration_value": "100",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "100 ng/ml Activin A",
+        },
+        {
+            "protocol_id": "p1",
+            "stage_id": "s2",
+            "stage_index": "2",
+            "day_start": "3",
+            "day_end": "7",
+            "factor_type": "reagent",
+            "factor_name": "CHIR99021",
+            "standardized_name": "CHIR99021",
+            "validation_status": "has_flags",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "CHIR99021",
+        },
+        {
+            "protocol_id": "p2",
+            "stage_id": "s1",
+            "factor_type": "reagent",
+            "factor_name": "KGF",
+            "standardized_name": "KGF",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "KGF",
+        },
+    ]
+    sources = [
+        {
+            "canonical_paper_id": "paper_a",
+            "canonical_source_id": "source_a",
+            "canonical_filename": "paper_a.pdf",
+            "source_role": "primary_article",
+        }
+    ]
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+        },
+    ).run(records, events, sources)
+
+    assert outputs["protocol_feature_matrix"].exists()
+    assert outputs["protocol_feature_matrix_raw"].exists()
+    assert outputs["protocol_candidate_feature_matrix"].exists()
+    assert outputs["base_feature_registry"].exists()
+    assert outputs["llm_proposed_feature_registry"].exists()
+    assert outputs["approved_feature_registry"].exists()
+    assert outputs["feature_cell_provenance"].exists()
+    assert outputs["feature_discovery_audit_report"].exists()
+    assert outputs["schema_validation_report"].exists()
+    assert outputs["normalized_factor_events"].exists()
+    assert outputs["semantic_stage_annotations"].exists()
+    assert outputs["protocol_strategy_summary"].exists()
+    assert outputs["llm_audit_report"].exists()
+    assert outputs["standardized_protocol_representations"].exists()
+    assert outputs["protocol_workflow_graphs"].exists()
+    assert outputs["protocol_feature_provenance"].exists()
+    assert outputs["protocol_embedding"].exists()
+    assert outputs["protocol_cluster_report"].exists()
+
+    matrix_rows = list(csv.DictReader(outputs["protocol_feature_matrix"].open(encoding="utf-8")))
+    assert [row["protocol_id"] for row in matrix_rows] == ["p1"]
+    p1 = matrix_rows[0]
+    assert p1["activin_presence"] == "1"
+    assert p1["chir_presence"] == "0"
+    assert p1["norm_family_tgf_beta_nodal_activation_family_presence"] == "1"
+    assert p1["semantic_module_definitive_endoderm_induction_presence"] == "1"
+
+    schema_report = json.loads(outputs["schema_validation_report"].read_text(encoding="utf-8"))
+    assert schema_report["summary"]["n_findings"] == 0
+
+    quality = json.loads(outputs["protocol_quality_filter_report"].read_text(encoding="utf-8"))
+    assert quality["summary"]["n_passed_quality_filter"] == 1
+    assert quality["event_filter_report"]["n_kept_events"] == 1
+    assert quality["event_filter_report"]["rejection_reasons"]["validation_status:has_flags"] == 1
+    assert quality["event_filter_report"]["rejection_reasons"]["protocol_failed_quality_filter"] == 1
+    assert quality["execution_engine"] == "langgraph"
+    assert [step["node"] for step in quality["step_log"]][:3] == [
+        "protocol_input_quality_gate",
+        "protocol_schema_validator",
+        "stage_timeline_builder",
+    ]
+    assert "feature_discovery" in [step["node"] for step in quality["step_log"]]
+
+    discovery_audit = json.loads(outputs["feature_discovery_audit_report"].read_text(encoding="utf-8"))
+    assert discovery_audit["schema_version"] == "feature-discovery-audit-v1"
+
+    graphs = json.loads(outputs["protocol_workflow_graphs"].read_text(encoding="utf-8"))
+    assert graphs["schema_version"] == "protocol-workflow-graph-v1"
+    assert graphs["protocols"]["p1"]["summary"]["n_stages"] == 2
+
+    provenance = json.loads(outputs["protocol_feature_provenance"].read_text(encoding="utf-8"))
+    assert provenance["protocols"]["p1"]["activin_presence"][0]["quote"] == "100 ng/ml Activin A"
+
+    embedding_rows = list(csv.DictReader(outputs["protocol_embedding"].open(encoding="utf-8")))
+    assert embedding_rows[0]["protocol_id"] == "p1"
+    assert embedding_rows[0]["protocol_cluster"]
+
+    normalized = [json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()]
+    assert normalized[0]["normalized_family"] == "TGF-beta/Nodal activation family"
+
+    strategies = json.loads(outputs["protocol_strategy_summary"].read_text(encoding="utf-8"))
+    assert strategies["protocols"][0]["protocol_id"] == "p1"
+
+    audit = json.loads(outputs["llm_audit_report"].read_text(encoding="utf-8"))
+    assert "summary" in audit
+
+
+def test_protocol_analysis_agent_accepts_mock_llm_for_unknown_factor(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Novel factor X"}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": "Novel factor X",
+            "standardized_name": "Novel factor X",
+            "validation_status": "evidence_supported",
+            "parse_status": "categorical",
+            "concentration_parse_status": "not_applicable",
+            "evidence_quote": "Novel factor X was added.",
+        }
+    ]
+    llm_client = StaticMockLLMClient(
+        {
+            "factor_event_normalizer": {
+                "normalized_name": "Novel factor X",
+                "normalized_family": "Experimental signaling family",
+                "factor_type": "reagent",
+                "pathway": "experimental",
+                "action_type": "add_reagent",
+                "confidence": "medium",
+            }
+        }
+    )
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+            "max_llm_normalization_events": 1,
+        },
+        llm_client=llm_client,
+    ).run(records, events, [])
+
+    normalized = [json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()]
+    assert normalized[0]["normalization_source"] == "llm"
+    assert normalized[0]["normalized_family"] == "Experimental signaling family"
+    assert llm_client.calls[0]["task"] == "factor_event_normalizer"
+
+
+def test_llm_feature_discovery_adds_candidate_column_without_approval(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Cells underwent custom protocol step X."}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "operation",
+            "factor_name": "custom protocol step X",
+            "standardized_name": "custom protocol step X",
+            "validation_status": "evidence_supported",
+            "parse_status": "categorical",
+            "concentration_parse_status": "not_applicable",
+            "evidence_quote": "Cells underwent custom protocol step X before aggregate handling.",
+        }
+    ]
+    llm_client = StaticMockLLMClient(
+        {
+            "feature_discovery": {
+                "protocol_id": "p1",
+                "proposed_features": [
+                    {
+                        "feature_name": "has_custom_llm_only_step",
+                        "feature_type": "binary",
+                        "level": "protocol",
+                        "biological_category": "novel_strategy",
+                        "rationale": "Custom step is explicitly described.",
+                        "trigger_patterns": ["custom protocol step x"],
+                        "value_rule": "presence",
+                        "source_fields": ["evidence_quote"],
+                        "required_evidence": True,
+                        "confidence": "medium",
+                        "proposed_by": "llm",
+                    }
+                ],
+            }
+        }
+    )
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+            "max_llm_feature_discovery_protocols": 1,
+        },
+        llm_client=llm_client,
+    ).run(records, events, [])
+
+    final_rows = list(csv.DictReader(outputs["protocol_feature_matrix"].open(encoding="utf-8")))
+    candidate_rows = list(csv.DictReader(outputs["protocol_candidate_feature_matrix"].open(encoding="utf-8")))
+    assert "has_custom_llm_only_step" not in final_rows[0]
+    assert candidate_rows[0]["has_custom_llm_only_step"] == "1"
+    proposed = json.loads(outputs["llm_proposed_feature_registry"].read_text(encoding="utf-8"))
+    assert proposed["summary"]["n_features"] == 1
+
+
+def test_llm_feature_discovery_rejects_columns_without_source_evidence(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Cells were cultured in standard medium."}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "operation",
+            "factor_name": "standard culture",
+            "standardized_name": "standard culture",
+            "validation_status": "evidence_supported",
+            "parse_status": "categorical",
+            "concentration_parse_status": "not_applicable",
+            "evidence_quote": "Cells were cultured in standard medium.",
+        }
+    ]
+    llm_client = StaticMockLLMClient(
+        {
+            "feature_discovery": {
+                "protocol_id": "p1",
+                "proposed_features": [
+                    {
+                        "feature_name": "has_unsupported_llm_claim",
+                        "feature_type": "binary",
+                        "level": "protocol",
+                        "biological_category": "unsupported",
+                        "rationale": "This should be rejected because no source field contains it.",
+                        "trigger_patterns": ["unsupported protocol claim"],
+                        "value_rule": "presence",
+                        "source_fields": ["event.evidence_quote", "stage.evidence_quote"],
+                        "required_evidence": True,
+                        "confidence": "medium",
+                        "proposed_by": "llm",
+                    }
+                ],
+            }
+        }
+    )
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+            "max_llm_feature_discovery_protocols": 1,
+        },
+        llm_client=llm_client,
+    ).run(records, events, [])
+
+    candidate_rows = list(csv.DictReader(outputs["protocol_candidate_feature_matrix"].open(encoding="utf-8")))
+    assert "has_unsupported_llm_claim" not in candidate_rows[0]
+    proposed = json.loads(outputs["llm_proposed_feature_registry"].read_text(encoding="utf-8"))
+    assert proposed["summary"]["n_features"] == 0
+    audit = json.loads(outputs["feature_discovery_audit_report"].read_text(encoding="utf-8"))
+    assert audit["findings"][0]["issue_type"] == "llm_feature_spec_has_no_source_evidence"
+
+
+def test_approved_feature_specs_are_compiled_by_explicit_dsl(tmp_path: Path) -> None:
+    registry_path = tmp_path / "approved_feature_registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "feature-registry-v1",
+                "features": [
+                    {
+                        "feature_name": "custom_activin_max_concentration",
+                        "feature_type": "numeric_max",
+                        "level": "protocol",
+                        "biological_category": "reagent_dose",
+                        "rationale": "Maximum concentration should be calculated from structured events.",
+                        "trigger_patterns": ["activin"],
+                        "value_rule": "max(concentration_value)",
+                        "source_fields": ["event.normalized_name", "event.normalized_family", "event.evidence_quote"],
+                        "required_evidence": True,
+                        "confidence": "high",
+                        "proposed_by": "human",
+                        "approved_status": "approved",
+                    },
+                    {
+                        "feature_name": "custom_activin_factor_types",
+                        "feature_type": "categorical",
+                        "level": "protocol",
+                        "biological_category": "factor_category",
+                        "rationale": "Factor types should be emitted as a category set.",
+                        "trigger_patterns": ["activin"],
+                        "value_rule": "category_set(factor_type)",
+                        "source_fields": ["event.normalized_name", "event.normalized_family", "event.evidence_quote"],
+                        "required_evidence": True,
+                        "confidence": "high",
+                        "proposed_by": "human",
+                        "approved_status": "approved",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Activin A was used."}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "day_start": "0",
+            "day_end": "1",
+            "factor_type": "reagent",
+            "factor_name": "Activin A",
+            "standardized_name": "Activin A",
+            "concentration_value": "100",
+            "concentration_unit": "ng/ml",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Activin A 100 ng/ml was used.",
+        },
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "day_start": "1",
+            "day_end": "2",
+            "factor_type": "reagent",
+            "factor_name": "Activin A",
+            "standardized_name": "Activin A",
+            "concentration_value": "50",
+            "concentration_unit": "ng/ml",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Activin A 50 ng/ml was used.",
+        },
+    ]
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+            "approved_feature_registry_path": str(registry_path),
+        },
+    ).run(records, events, [])
+
+    matrix_rows = list(csv.DictReader(outputs["protocol_feature_matrix"].open(encoding="utf-8")))
+    assert float(matrix_rows[0]["custom_activin_max_concentration"]) == 100
+    assert matrix_rows[0]["custom_activin_factor_types"] == "reagent"
+    provenance = json.loads(outputs["feature_cell_provenance"].read_text(encoding="utf-8"))
+    cell = provenance["final_matrix"]["protocols"]["p1"]["custom_activin_max_concentration"]
+    assert cell["n_provenance_refs"] == 2
+
+
+def test_protocol_analysis_agent_does_not_reagent_normalize_non_reagent_from_quote(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Activin was added."}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "qc_marker",
+            "factor_name": "qPCR for SOX17",
+            "standardized_name": "qPCR for SOX17",
+            "value_raw": "Activin was added before qPCR.",
+            "validation_status": "evidence_supported",
+            "parse_status": "categorical",
+            "concentration_parse_status": "not_applicable",
+            "evidence_quote": "Activin was added before qPCR.",
+        }
+    ]
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+        },
+    ).run(records, events, [])
+
+    normalized = [json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()]
+    assert normalized[0]["factor_type"] == "qc_marker"
+    assert normalized[0]["normalized_family"] == "qc_marker"
+
+
+def test_protocol_query_layer_compares_generated_outputs(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "DE", "day_start": 0, "day_end": 3, "evidence_quote": "Activin A"}],
+        },
+        {
+            "protocol_id": "p2",
+            "paper_id": "paper_b",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p2", "protocol_name": "Protocol B", "number_of_stages": 1},
+            "stages": [{"stage_id": "s2", "stage_index": 1, "stage_name": "Maturation", "day_start": 10, "day_end": 20, "evidence_quote": "T3"}],
+        },
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": "Activin A",
+            "standardized_name": "Activin A",
+            "validation_status": "evidence_supported",
+            "parse_status": "categorical",
+            "concentration_parse_status": "not_applicable",
+            "evidence_quote": "Activin A was added.",
+        },
+        {
+            "protocol_id": "p2",
+            "stage_id": "s2",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": "T3",
+            "standardized_name": "T3",
+            "validation_status": "evidence_supported",
+            "parse_status": "categorical",
+            "concentration_parse_status": "not_applicable",
+            "evidence_quote": "T3 was added.",
+        },
+    ]
+    ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+        },
+    ).run(records, events, [])
+
+    engine = ProtocolQueryEngine(tmp_path)
+    assert engine.find_protocols("Protocol A")[0]["protocol_id"] == "p1"
+    comparison = engine.compare_protocols("p1", "p2")
+    assert comparison["status"] == "ok"
+    assert "grouped_feature_differences" in comparison
+    assert "TGF-beta/Nodal activation family" in comparison["factor_diff"]["protocol_a_specific_normalized_families"]
+    assert "Beta-cell maturation support family" in comparison["factor_diff"]["protocol_b_specific_normalized_families"]
+
+
+def test_schema_invalid_key_factor_is_rejected_by_default(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "day_start": 0, "day_end": 1}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": "Activin A",
+            "standardized_name": "Activin A",
+            "validation_status": "evidence_supported",
+            "parse_status": "categorical",
+            "concentration_parse_status": "not_applicable",
+            "evidence_quote": "",
+        }
+    ]
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+        },
+    ).run(records, events, [])
+
+    schema = json.loads(outputs["schema_validation_report"].read_text(encoding="utf-8"))
+    assert schema["summary"]["n_rejected_factor_events"] == 1
+    normalized = outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()
+    assert normalized == []
+
+
+def test_protocol_query_layer_finds_author_year_with_normalized_tokens(tmp_path: Path) -> None:
+    matrix_path = tmp_path / "protocol_feature_matrix.csv"
+    matrix_path.write_text(
+        "protocol_id,paper_id,dataset_id,protocol_name,confidence_score,comparison_ready\n"
+        "p1,akgün_canan_2024,GSE1,Example protocol,0.9,True\n",
+        encoding="utf-8",
+    )
+
+    hits = ProtocolQueryEngine(tmp_path).find_protocols("Akgün 2024")
+    assert hits[0]["protocol_id"] == "p1"
+    assert hits[0]["matched_tokens"] == ["2024", "akgun"]

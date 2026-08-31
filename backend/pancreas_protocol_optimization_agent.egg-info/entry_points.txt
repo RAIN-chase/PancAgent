@@ -1,0 +1,5 @@
+[console_scripts]
+protocol-analysis-agent = protocol_optimization_agent.protocol_analysis_cli:main
+protocol-api = protocol_optimization_agent.api:main
+protocol-optimization-agent = protocol_optimization_agent.cli:main
+protocol-query = protocol_optimization_agent.protocol_query_cli:main
