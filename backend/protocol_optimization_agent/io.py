@@ -27,6 +27,12 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
     ensure_dir(path.parent)
     with path.open("w", encoding="utf-8", newline="\n") as handle:

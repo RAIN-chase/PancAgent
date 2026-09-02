@@ -53,6 +53,26 @@ KEY_FACTOR_TYPES_REQUIRING_EVIDENCE = {
 
 DEFAULT_ALLOWED_EVENT_STATUSES = {"evidence_supported"}
 
+ACTION_CATEGORY_PATTERNS: dict[str, tuple[str, ...]] = {
+    "add_reagent_or_factor": ("add", "added", "addition", "supplement", "supplemented", "treat", "treated", "expos", "containing", "with"),
+    "medium_change_or_replace": ("change", "changed", "replace", "replaced", "refresh", "feed", "fed"),
+    "culture_or_incubate": ("culture", "cultured", "incubat", "maintain", "maintained", "differentiat", "grown", "grow"),
+    "wash": ("wash", "washed", "rinse", "rinsed"),
+    "dissociation": ("dissociat", "detach", "detached", "trypsin", "accutase", "single-cell", "single cell"),
+    "passage": ("passag", "split", "subcultur"),
+    "seed_or_plate": ("seed", "seeded", "plate", "plated", "replate", "replated"),
+    "transfer": ("transfer", "transferred", "move", "moved"),
+    "aggregation_or_3d_formation": ("aggregat", "reaggregat", "cluster", "spheroid", "organoid", "embryoid bod"),
+    "matrix_or_coating": ("coat", "coated", "matrix", "matrigel", "laminin", "collagen", "embed", "embedded", "overlay"),
+    "suspension_or_shaking": ("suspension", "spinner", "shak", "rotat", "orbital", "stir"),
+    "sorting_or_enrichment": ("sort", "sorted", "facs", "macs", "enrich", "enriched", "purif"),
+    "infection_or_transduction": ("infect", "infection", "transduc", "lentivirus", "virus", "spinfection"),
+    "genetic_perturbation": ("crispr", "knockdown", "knockout", "sirna", "shrna", "transfect", "transfection", "overexpress"),
+    "assay_or_qc": ("assay", "stain", "staining", "immunostain", "qpcr", "rt-pcr", "flow cytometry", "facs analysis", "measure", "marker", "glucose", "gsis"),
+    "transplantation": ("transplant", "graft", "implanted", "kidney capsule", "in vivo"),
+    "cryopreservation": ("cryopreserv", "freeze", "frozen", "thaw", "thawed"),
+}
+
 
 class ProtocolAnalysisState(TypedDict, total=False):
     protocol_records: list[dict[str, Any]]
@@ -81,6 +101,8 @@ class ProtocolAnalysisState(TypedDict, total=False):
     feature_provenance: dict[str, Any]
     feature_cell_provenance: dict[str, Any]
     feature_discovery_audit_report: dict[str, Any]
+    quantification_coverage_report: dict[str, Any]
+    predefined_feature_registry: dict[str, Any]
     approved_feature_registry: dict[str, Any]
     similarity_rows: list[dict[str, Any]]
     relationship_report: dict[str, Any]
@@ -246,6 +268,12 @@ class ProtocolAnalysisAgent:
             state.get("accepted_protocol_ids", set()),
             state.get("semantic_annotations", []),
         )
+        quantification_coverage_report = _build_quantification_coverage_report(
+            state.get("analysis_events", []),
+            feature_rows,
+            feature_provenance,
+        )
+        predefined_feature_registry = _build_predefined_quantification_registry(state.get("analysis_events", []))
         workflow_graphs = _build_protocol_workflow_graphs(
             state.get("protocol_records", []),
             state.get("analysis_events", []),
@@ -272,6 +300,8 @@ class ProtocolAnalysisAgent:
             "feature_rows": feature_rows,
             "raw_feature_rows": feature_rows,
             "feature_provenance": feature_provenance,
+            "quantification_coverage_report": quantification_coverage_report,
+            "predefined_feature_registry": predefined_feature_registry,
             "workflow_graphs": workflow_graphs,
             "knowledge_graph": knowledge_graph,
             "standardized_protocols": standardized_protocols,
@@ -288,14 +318,22 @@ class ProtocolAnalysisAgent:
             self.quality_filters,
             llm_client=self.llm_client,
         )
+        final_feature_provenance = cell_provenance.get("final_matrix", {}).get("feature_provenance", state.get("feature_provenance", {}))
+        quantification_coverage_report = _build_quantification_coverage_report(
+            state.get("analysis_events", []),
+            final_rows,
+            final_feature_provenance,
+        )
         return {
             **state,
             "feature_rows": final_rows,
             "candidate_feature_rows": candidate_rows,
-            "feature_provenance": cell_provenance.get("final_matrix", {}).get("feature_provenance", state.get("feature_provenance", {})),
+            "feature_provenance": final_feature_provenance,
             "feature_cell_provenance": cell_provenance,
             "approved_feature_registry": approved_registry,
             "feature_discovery_audit_report": discovery_report,
+            "quantification_coverage_report": quantification_coverage_report,
+            "predefined_feature_registry": state.get("predefined_feature_registry", {}),
             "step_log": _append_step(state, "feature_discovery"),
         }
 
@@ -369,11 +407,13 @@ class ProtocolAnalysisAgent:
         write_json(outputs["base_feature_registry"], state.get("feature_discovery_audit_report", {}).get("base_feature_registry", {}))
         write_json(outputs["llm_proposed_feature_registry"], state.get("feature_discovery_audit_report", {}).get("llm_proposed_feature_registry", {}))
         write_json(outputs["approved_feature_registry"], state.get("approved_feature_registry", {}))
+        write_json(outputs["predefined_feature_registry"], state.get("predefined_feature_registry", {}))
         write_csv_dicts(outputs["protocol_candidate_feature_matrix"], state.get("candidate_feature_rows", []))
         write_json(outputs["feature_cell_provenance"], state.get("feature_cell_provenance", {}))
         write_json(outputs["feature_discovery_audit_report"], state.get("feature_discovery_audit_report", {}))
         write_csv_dicts(outputs["protocol_feature_matrix"], state.get("feature_rows", []))
         write_json(outputs["protocol_feature_provenance"], state.get("feature_provenance", {}))
+        write_json(outputs["quantification_coverage_report"], state.get("quantification_coverage_report", {}))
         write_csv_dicts(outputs["protocol_similarity_matrix"], state.get("similarity_rows", []))
         write_json(outputs["protocol_relationship_report"], state.get("relationship_report", {}))
         write_csv_dicts(outputs["protocol_embedding"], state.get("embeddings", []))
@@ -399,11 +439,13 @@ class ProtocolAnalysisAgent:
             "base_feature_registry": self.output_dir / "base_feature_registry.json",
             "llm_proposed_feature_registry": self.output_dir / "llm_proposed_feature_registry.json",
             "approved_feature_registry": self.output_dir / "approved_feature_registry.json",
+            "predefined_feature_registry": self.output_dir / "predefined_feature_registry.json",
             "protocol_candidate_feature_matrix": self.output_dir / "protocol_candidate_feature_matrix.csv",
             "feature_cell_provenance": self.output_dir / "feature_cell_provenance.json",
             "feature_discovery_audit_report": self.output_dir / "feature_discovery_audit_report.json",
             "protocol_feature_matrix": self.output_dir / "protocol_feature_matrix.csv",
             "protocol_feature_provenance": self.output_dir / "protocol_feature_provenance.json",
+            "quantification_coverage_report": self.output_dir / "quantification_coverage_report.json",
             "protocol_similarity_matrix": self.output_dir / "protocol_similarity_matrix.csv",
             "protocol_relationship_report": self.output_dir / "protocol_relationship_report.json",
             "protocol_embedding": self.output_dir / "protocol_embedding.csv",
@@ -857,9 +899,13 @@ def _build_protocol_feature_matrix(
         _add_temporal_features(row, protocol, stages, protocol_events, provenance[protocol_id])
         _add_action_and_operation_features(row, protocol_events, stages, provenance[protocol_id])
         _add_reagent_family_features(row, protocol_events, provenance[protocol_id])
+        _add_all_reagent_identity_features(row, protocol_events, provenance[protocol_id])
+        _add_factor_type_features(row, protocol_events, provenance[protocol_id])
+        _add_action_category_features(row, protocol_events, stages, provenance[protocol_id])
         _add_normalized_factor_features(row, protocol_events, provenance[protocol_id])
         _add_semantic_strategy_features(row, semantic_annotations or [], protocol_id, provenance[protocol_id])
         _add_order_features(row, protocol_events, provenance[protocol_id])
+        _add_graph_sequence_and_topology_features(row, protocol_events, stages, provenance[protocol_id])
         _add_dependency_features(row, protocol_events, stages, provenance[protocol_id])
         dynamic_feature_keys.update(key for key in row if key not in _metadata_columns())
         partial_rows.append(row)
@@ -947,6 +993,83 @@ def _add_reagent_family_features(
             provenance[f"{prefix}_{suffix}"] = refs
 
 
+def _add_all_reagent_identity_features(
+    row: dict[str, Any],
+    events: list[dict[str, Any]],
+    provenance: dict[str, list[dict[str, Any]]],
+) -> None:
+    reagent_events_by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in events:
+        if str(event.get("factor_type") or "") != "reagent":
+            continue
+        reagent_name = _feature_name(_factor_name(event))
+        if reagent_name:
+            reagent_events_by_name[reagent_name].append(event)
+
+    for reagent_name, reagent_events in sorted(reagent_events_by_name.items()):
+        prefix = f"all_reagent_{reagent_name}"
+        row[f"{prefix}_presence"] = 1
+        row[f"{prefix}_n_events"] = len(reagent_events)
+        row[f"{prefix}_total_exposure"] = round(_total_exposure_days(reagent_events), 3)
+        row[f"{prefix}_start_day"] = _blank_if_none(_min_numeric(reagent_events, "day_start"))
+        row[f"{prefix}_end_day"] = _blank_if_none(_max_numeric(reagent_events, "day_end"))
+        row[f"{prefix}_max_concentration"] = _blank_if_none(_max_numeric(reagent_events, "concentration_value"))
+        refs = [_event_ref(event) for event in reagent_events]
+        for suffix in ("presence", "n_events", "total_exposure", "start_day", "end_day", "max_concentration"):
+            provenance[f"{prefix}_{suffix}"] = refs
+
+
+def _add_factor_type_features(
+    row: dict[str, Any],
+    events: list[dict[str, Any]],
+    provenance: dict[str, list[dict[str, Any]]],
+) -> None:
+    events_by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in events:
+        factor_type = _feature_name(str(event.get("factor_type") or "unknown"))
+        if factor_type:
+            events_by_type[factor_type].append(event)
+
+    for factor_type, type_events in sorted(events_by_type.items()):
+        prefix = f"factor_type_{factor_type}"
+        row[f"{prefix}_presence"] = 1
+        row[f"{prefix}_n_events"] = len(type_events)
+        row[f"{prefix}_start_day"] = _blank_if_none(_min_numeric(type_events, "day_start"))
+        row[f"{prefix}_end_day"] = _blank_if_none(_max_numeric(type_events, "day_end"))
+        refs = [_event_ref(event) for event in type_events]
+        for suffix in ("presence", "n_events", "start_day", "end_day"):
+            provenance[f"{prefix}_{suffix}"] = refs
+
+
+def _add_action_category_features(
+    row: dict[str, Any],
+    events: list[dict[str, Any]],
+    stages: list[dict[str, Any]],
+    provenance: dict[str, list[dict[str, Any]]],
+) -> None:
+    categorized_refs: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    categorized_stage_refs: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+    for event in events:
+        text = _event_text(event)
+        for category in _action_categories_for_text(text, event):
+            categorized_refs[category].append(_event_ref(event))
+
+    for stage in stages:
+        text = str(stage.get("key_operations") or "")
+        for category in _action_categories_for_text(text, None):
+            categorized_stage_refs[category].append(_stage_ref(stage))
+
+    for category in sorted(set(categorized_refs).union(categorized_stage_refs)):
+        prefix = f"action_category_{category}"
+        row[f"{prefix}_presence"] = 1
+        row[f"{prefix}_n_events"] = len(categorized_refs.get(category, []))
+        row[f"{prefix}_n_stage_mentions"] = len(categorized_stage_refs.get(category, []))
+        provenance_refs = categorized_refs.get(category, []) + categorized_stage_refs.get(category, [])
+        for suffix in ("presence", "n_events", "n_stage_mentions"):
+            provenance[f"{prefix}_{suffix}"] = provenance_refs
+
+
 def _add_normalized_factor_features(
     row: dict[str, Any],
     events: list[dict[str, Any]],
@@ -1022,6 +1145,103 @@ def _add_order_features(
         provenance[feature] = refs_by_family.get(previous, []) + refs_by_family.get(current, [])
 
 
+def _add_graph_sequence_and_topology_features(
+    row: dict[str, Any],
+    events: list[dict[str, Any]],
+    stages: list[dict[str, Any]],
+    provenance: dict[str, list[dict[str, Any]]],
+) -> None:
+    ordered_events = _ordered_events(events)
+    stage_ids = {str(stage.get("stage_id") or "") for stage in stages if stage.get("stage_id")}
+    event_stage_ids = {str(event.get("stage_id") or "") for event in events if event.get("stage_id")}
+    reagent_events = [event for event in ordered_events if str(event.get("factor_type") or "") == "reagent" and _feature_name(_factor_name(event))]
+    action_labels = [_feature_name(_operation_label(event)) for event in ordered_events]
+    factor_types = [_feature_name(str(event.get("factor_type") or "unknown")) for event in ordered_events]
+
+    row["graph_n_stage_nodes"] = len(stage_ids or event_stage_ids)
+    row["graph_n_action_nodes"] = len(ordered_events)
+    row["graph_n_reagent_item_nodes"] = len({_feature_name(_factor_name(event)) for event in reagent_events})
+    row["graph_n_event_edges"] = len(ordered_events)
+    row["graph_n_next_action_edges"] = max(len(ordered_events) - 1, 0)
+    row["graph_n_next_stage_edges"] = max(row["graph_n_stage_nodes"] - 1, 0)
+    row["graph_mean_actions_per_stage"] = round(len(ordered_events) / row["graph_n_stage_nodes"], 3) if row["graph_n_stage_nodes"] else 0
+    row["graph_max_actions_per_stage"] = max(Counter(str(event.get("stage_id") or "") for event in ordered_events).values() or [0])
+    refs = [_event_ref(event) for event in ordered_events]
+    for feature in (
+        "graph_n_stage_nodes",
+        "graph_n_action_nodes",
+        "graph_n_reagent_item_nodes",
+        "graph_n_event_edges",
+        "graph_n_next_action_edges",
+        "graph_n_next_stage_edges",
+        "graph_mean_actions_per_stage",
+        "graph_max_actions_per_stage",
+    ):
+        provenance[feature] = refs or [_stage_ref(stage) for stage in stages]
+
+    for previous, current in zip(action_labels, action_labels[1:]):
+        if not previous or not current:
+            continue
+        feature = f"action_bigram_{previous}_to_{current}"
+        row[feature] = row.get(feature, 0) + 1
+    _attach_adjacent_pair_provenance("action_bigram", action_labels, ordered_events, provenance)
+
+    for previous, current in zip(factor_types, factor_types[1:]):
+        if not previous or not current:
+            continue
+        feature = f"factor_type_bigram_{previous}_to_{current}"
+        row[feature] = row.get(feature, 0) + 1
+    _attach_adjacent_pair_provenance("factor_type_bigram", factor_types, ordered_events, provenance)
+
+    reagent_labels = [_feature_name(_factor_name(event)) for event in reagent_events]
+    for previous, current in zip(reagent_labels, reagent_labels[1:]):
+        if not previous or not current:
+            continue
+        feature = f"all_reagent_transition_{previous}_to_{current}"
+        row[feature] = row.get(feature, 0) + 1
+    _attach_adjacent_pair_provenance("all_reagent_transition", reagent_labels, reagent_events, provenance)
+
+    for event in reagent_events:
+        action = _feature_name(_operation_label(event))
+        reagent = _feature_name(_factor_name(event))
+        if not action or not reagent:
+            continue
+        feature = f"motif_action_{action}_uses_reagent_{reagent}"
+        row[feature] = 1
+        provenance.setdefault(feature, []).append(_event_ref(event))
+
+
+def _ordered_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        events,
+        key=lambda event: (
+            _sort_float(event.get("day_start")),
+            _sort_float(event.get("stage_index")),
+            str(event.get("stage_id") or ""),
+            str(event.get("event_id") or ""),
+            _factor_name(event),
+        ),
+    )
+
+
+def _sort_float(value: Any, default: float = 1_000_000) -> float:
+    parsed = _safe_float(value, None)
+    return parsed if parsed is not None else default
+
+
+def _attach_adjacent_pair_provenance(
+    prefix: str,
+    labels: list[str],
+    events: list[dict[str, Any]],
+    provenance: dict[str, list[dict[str, Any]]],
+) -> None:
+    for index, (previous, current) in enumerate(zip(labels, labels[1:])):
+        if not previous or not current:
+            continue
+        feature = f"{prefix}_{previous}_to_{current}"
+        provenance.setdefault(feature, []).extend([_event_ref(events[index]), _event_ref(events[index + 1])])
+
+
 def _add_dependency_features(
     row: dict[str, Any],
     events: list[dict[str, Any]],
@@ -1077,6 +1297,222 @@ def _build_protocol_relationships(feature_rows: list[dict[str, Any]]) -> tuple[l
     return rows, {"pairwise_relationships": pair_reports, "binary_feature_keys": binary_keys}
 
 
+def _build_quantification_coverage_report(
+    events: list[dict[str, Any]],
+    feature_rows: list[dict[str, Any]],
+    feature_provenance: dict[str, Any],
+) -> dict[str, Any]:
+    matrix_columns = set(feature_rows[0]) if feature_rows else set()
+    reagent_names = sorted(
+        {
+            _feature_name(_factor_name(event))
+            for event in events
+            if str(event.get("factor_type") or "") == "reagent" and _feature_name(_factor_name(event))
+        }
+    )
+    reagent_labels_by_feature: dict[str, set[str]] = defaultdict(set)
+    for event in events:
+        if str(event.get("factor_type") or "") != "reagent":
+            continue
+        label = _factor_name(event)
+        feature_key = _feature_name(label)
+        if feature_key:
+            reagent_labels_by_feature[feature_key].add(label)
+    reagent_name_collisions = {
+        feature_key: sorted(labels)
+        for feature_key, labels in reagent_labels_by_feature.items()
+        if len(labels) > 1
+    }
+    factor_types = sorted(
+        {
+            _feature_name(str(event.get("factor_type") or "unknown"))
+            for event in events
+            if _feature_name(str(event.get("factor_type") or "unknown"))
+        }
+    )
+    action_categories = sorted(
+        {
+            category
+            for event in events
+            for category in _action_categories_for_text(_event_text(event), event)
+        }
+    )
+    action_relevant_events = [
+        event
+        for event in events
+        if str(event.get("factor_type") or "") != "reagent" or _has_text(event.get("operation"))
+    ]
+    uncategorized_action_events = [
+        {
+            "protocol_id": event.get("protocol_id") or "",
+            "stage_id": event.get("stage_id") or "",
+            "factor_type": event.get("factor_type") or "",
+            "factor_name": _factor_name(event),
+            "operation": event.get("operation") or "",
+            "quote": event.get("evidence_quote") or "",
+        }
+        for event in action_relevant_events
+        if not _action_categories_for_text(_event_text(event), event)
+    ]
+    missing_reagents = [
+        name for name in reagent_names if f"all_reagent_{name}_presence" not in matrix_columns
+    ]
+    missing_factor_types = [
+        factor_type for factor_type in factor_types if f"factor_type_{factor_type}_presence" not in matrix_columns
+    ]
+    missing_action_categories = [
+        category for category in action_categories if f"action_category_{category}_presence" not in matrix_columns
+    ]
+    provenance_protocols = feature_provenance.get("protocols", {}) if isinstance(feature_provenance, dict) else {}
+    missing_provenance_columns = sorted(
+        column
+        for column in matrix_columns
+        if column.startswith(("all_reagent_", "factor_type_", "action_category_"))
+        and not any(column in protocol_provenance for protocol_provenance in provenance_protocols.values())
+    )
+    status = "pass" if not (missing_reagents or missing_factor_types or missing_action_categories or missing_provenance_columns or uncategorized_action_events) else "fail"
+    return {
+        "status": status,
+        "scope": "accepted_filtered_analysis_events_only",
+        "n_analysis_events": len(events),
+        "n_feature_rows": len(feature_rows),
+        "n_matrix_columns": len(matrix_columns),
+        "reagent_coverage": {
+            "n_unique_reagents": len(reagent_names),
+            "n_presence_columns": sum(1 for column in matrix_columns if column.startswith("all_reagent_") and column.endswith("_presence")),
+            "missing_reagents": missing_reagents,
+            "reagent_name_collisions": reagent_name_collisions,
+        },
+        "factor_type_coverage": {
+            "n_unique_factor_types": len(factor_types),
+            "n_presence_columns": sum(1 for column in matrix_columns if column.startswith("factor_type_") and column.endswith("_presence")),
+            "missing_factor_types": missing_factor_types,
+        },
+        "action_category_coverage": {
+            "n_unique_action_categories": len(action_categories),
+            "n_presence_columns": sum(1 for column in matrix_columns if column.startswith("action_category_") and column.endswith("_presence")),
+            "n_action_relevant_events": len(action_relevant_events),
+            "n_uncategorized_action_events": len(uncategorized_action_events),
+            "missing_action_categories": missing_action_categories,
+            "uncategorized_action_events": uncategorized_action_events[:100],
+        },
+        "missing_provenance_columns": missing_provenance_columns,
+    }
+
+
+def _build_predefined_quantification_registry(events: list[dict[str, Any]]) -> dict[str, Any]:
+    reagent_labels_by_feature: dict[str, set[str]] = defaultdict(set)
+    factor_types: set[str] = set()
+    action_categories: set[str] = set()
+    for event in events:
+        factor_type_raw = str(event.get("factor_type") or "unknown")
+        factor_type = _feature_name(factor_type_raw)
+        if factor_type:
+            factor_types.add(factor_type)
+        if factor_type_raw == "reagent":
+            reagent_name = _factor_name(event)
+            reagent_key = _feature_name(reagent_name)
+            if reagent_key:
+                reagent_labels_by_feature[reagent_key].add(reagent_name)
+        action_categories.update(_action_categories_for_text(_event_text(event), event))
+
+    features: list[dict[str, Any]] = []
+    for reagent_key, labels in sorted(reagent_labels_by_feature.items()):
+        base = f"all_reagent_{reagent_key}"
+        features.extend(
+            [
+                _predefined_feature(base, "presence", "binary", "reagent_identity", f"1 if reagent `{reagent_key}` appears in accepted factor events."),
+                _predefined_feature(base, "n_events", "count", "reagent_identity", f"Count of accepted events for reagent `{reagent_key}`."),
+                _predefined_feature(base, "total_exposure", "numeric_sum", "reagent_timing", f"Sum of exposure duration for reagent `{reagent_key}` when day_start/day_end are available."),
+                _predefined_feature(base, "start_day", "numeric_min", "reagent_timing", f"Earliest day_start for reagent `{reagent_key}`."),
+                _predefined_feature(base, "end_day", "numeric_max", "reagent_timing", f"Latest day_end for reagent `{reagent_key}`."),
+                _predefined_feature(base, "max_concentration", "numeric_max", "reagent_dose", f"Maximum parsed concentration_value for reagent `{reagent_key}`."),
+            ]
+        )
+        for feature in features[-6:]:
+            feature["canonical_labels"] = sorted(labels)
+            feature["selector"] = {"factor_type": "reagent", "feature_key": reagent_key}
+
+    for factor_type in sorted(factor_types):
+        base = f"factor_type_{factor_type}"
+        features.extend(
+            [
+                _predefined_feature(base, "presence", "binary", "factor_type_coverage", f"1 if accepted events include factor_type `{factor_type}`."),
+                _predefined_feature(base, "n_events", "count", "factor_type_coverage", f"Count of accepted events with factor_type `{factor_type}`."),
+                _predefined_feature(base, "start_day", "numeric_min", "factor_type_timing", f"Earliest day_start for factor_type `{factor_type}`."),
+                _predefined_feature(base, "end_day", "numeric_max", "factor_type_timing", f"Latest day_end for factor_type `{factor_type}`."),
+            ]
+        )
+        for feature in features[-4:]:
+            feature["selector"] = {"factor_type": factor_type}
+
+    for category in sorted(action_categories):
+        base = f"action_category_{category}"
+        features.extend(
+            [
+                _predefined_feature(base, "presence", "binary", "action_category_coverage", f"1 if accepted events or stage operations match action category `{category}`."),
+                _predefined_feature(base, "n_events", "count", "action_category_coverage", f"Count of accepted events matching action category `{category}`."),
+                _predefined_feature(base, "n_stage_mentions", "count", "action_category_coverage", f"Count of accepted stage operation summaries matching action category `{category}`."),
+            ]
+        )
+        for feature in features[-3:]:
+            feature["selector"] = {"action_category": category}
+
+    return {
+        "schema_version": "predefined-feature-registry-v1",
+        "source": "ProtocolAnalysisAgent deterministic quantification layer",
+        "scope": "accepted_filtered_analysis_events_only",
+        "families": [
+            {
+                "name": "all_reagent",
+                "description": "One predefined feature group for every reagent identity observed in accepted reagent events.",
+                "n_entities": len(reagent_labels_by_feature),
+                "features_per_entity": ["presence", "n_events", "total_exposure", "start_day", "end_day", "max_concentration"],
+            },
+            {
+                "name": "factor_type",
+                "description": "One predefined feature group for every structured factor_type observed in accepted events.",
+                "n_entities": len(factor_types),
+                "features_per_entity": ["presence", "n_events", "start_day", "end_day"],
+            },
+            {
+                "name": "action_category",
+                "description": "One predefined feature group for every standardized experimental action category detected in accepted events or stage operations.",
+                "n_entities": len(action_categories),
+                "features_per_entity": ["presence", "n_events", "n_stage_mentions"],
+            },
+        ],
+        "n_features": len(features),
+        "features": features,
+    }
+
+
+def _predefined_feature(base: str, suffix: str, feature_type: str, category: str, definition: str) -> dict[str, Any]:
+    return {
+        "feature_name": f"{base}_{suffix}",
+        "feature_type": feature_type,
+        "level": "protocol",
+        "biological_category": category,
+        "definition": definition,
+        "value_rule": suffix,
+        "source_fields": [
+            "analysis_events.factor_type",
+            "analysis_events.factor_name",
+            "analysis_events.standardized_name",
+            "analysis_events.day_start",
+            "analysis_events.day_end",
+            "analysis_events.concentration_value",
+            "analysis_events.operation",
+            "stages.key_operations",
+            "evidence_quote",
+        ],
+        "required_evidence": True,
+        "computed_by": "ProtocolAnalysisAgent deterministic predefined feature compiler",
+        "proposed_by": "rule",
+        "approved_status": "approved",
+    }
+
+
 def _build_protocol_workflow_graphs(
     protocol_records: list[dict[str, Any]],
     events: list[dict[str, Any]],
@@ -1130,6 +1566,7 @@ def _build_protocol_workflow_graphs(
                     "id": action_id,
                     "type": "action",
                     "label": "stage operation summary",
+                    "action_class": "modify",
                     "operation": stage.get("key_operations"),
                     "evidence_quote": stage.get("evidence_quote"),
                 }
@@ -1138,15 +1575,19 @@ def _build_protocol_workflow_graphs(
             if previous.get("stage_id") and current.get("stage_id"):
                 edges.append({"source": previous["stage_id"], "target": current["stage_id"], "type": "next_stage"})
 
-        for index, event in enumerate(by_protocol.get(protocol_id, [])):
+        ordered_protocol_events = _ordered_events(by_protocol.get(protocol_id, []))
+        action_ids_in_order: list[str] = []
+        for index, event in enumerate(ordered_protocol_events):
             stage_id = str(event.get("stage_id") or protocol_id)
             action_id = f"action:{event.get('event_id') or protocol_id + ':' + str(index)}"
+            action_ids_in_order.append(action_id)
             factor_name = _factor_name(event)
             operation_label = _operation_label(event)
             nodes[action_id] = {
                 "id": action_id,
                 "type": "action",
                 "label": operation_label,
+                "action_class": _uwl_action_class(operation_label),
                 "factor_type": event.get("factor_type"),
                 "operation": event.get("operation"),
                 "timing": event.get("timing"),
@@ -1174,10 +1615,13 @@ def _build_protocol_workflow_graphs(
                         "source": action_id,
                         "target": reagent_id,
                         "type": "uses_reagent_or_factor",
+                        "item_role": _uwl_item_role(event),
                         "day_start": event.get("day_start"),
                         "day_end": event.get("day_end"),
                     }
                 )
+        for previous, current in zip(action_ids_in_order, action_ids_in_order[1:]):
+            edges.append({"source": previous, "target": current, "type": "next_action"})
 
         graphs[protocol_id] = {
             "protocol_id": protocol_id,
@@ -1480,6 +1924,65 @@ def _operation_label(event: dict[str, Any]) -> str:
     if factor_type:
         return factor_type
     return "protocol_action"
+
+
+def _uwl_action_class(action_label: str) -> str:
+    label = str(action_label or "").lower()
+    if label in {"add_reagent", "set_medium", "set_matrix_or_coating", "transfer_or_seed", "aggregate"}:
+        return "add"
+    if label in {"wash", "dissociate"}:
+        return "remove"
+    return "modify"
+
+
+def _uwl_item_role(event: dict[str, Any]) -> str:
+    factor_type = str(event.get("factor_type") or "")
+    action_label = _operation_label(event)
+    if factor_type == "reagent" or action_label == "add_reagent":
+        return "mobile_item_added_or_applied"
+    if factor_type in {"medium_base", "matrix_or_coating", "culture_format"}:
+        return "environment_or_stationary_context"
+    if factor_type in {"assay", "qc_marker"}:
+        return "measurement_target_or_readout"
+    return "associated_item_or_parameter"
+
+
+def _action_categories_for_text(text: str, event: dict[str, Any] | None) -> set[str]:
+    lowered = str(text or "").lower()
+    categories = {
+        category
+        for category, patterns in ACTION_CATEGORY_PATTERNS.items()
+        if any(pattern in lowered for pattern in patterns)
+    }
+    if event:
+        factor_type = str(event.get("factor_type") or "").strip()
+        action_type = _operation_label(event)
+        if factor_type == "reagent" or action_type == "add_reagent":
+            categories.add("add_reagent_or_factor")
+        if factor_type in {"assay", "qc_marker"} or action_type == "assay":
+            categories.add("assay_or_qc")
+        if factor_type == "matrix_or_coating" or action_type == "set_matrix_or_coating":
+            categories.add("matrix_or_coating")
+        if factor_type == "aggregation" or action_type == "aggregate":
+            categories.add("aggregation_or_3d_formation")
+        if factor_type == "sorting":
+            categories.add("sorting_or_enrichment")
+        if factor_type == "transplantation":
+            categories.add("transplantation")
+        if factor_type in {"culture_format", "mechanical_condition"}:
+            categories.add("culture_or_incubate")
+        if action_type in {"dissociate", "transfer_or_seed", "wash"}:
+            mapped = {
+                "dissociate": "dissociation",
+                "transfer_or_seed": "seed_or_plate",
+                "wash": "wash",
+            }
+            categories.add(mapped[action_type])
+        if not categories and (factor_type != "reagent" or _has_text(event.get("operation"))):
+            categories.add("other_protocol_action")
+    elif lowered and not categories:
+        categories.add("other_protocol_action")
+    return categories
 
 
 def _stage_ref(stage: dict[str, Any]) -> dict[str, Any]:

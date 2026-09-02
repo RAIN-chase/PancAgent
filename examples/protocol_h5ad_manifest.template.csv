@@ -1,0 +1,2 @@
+protocol_id,dataset_id,h5ad_path,condition_id,sample_id,cell_type_col,batch_col
+protocol_a,dataset_001,data/h5ad/protocol_a.h5ad,condition_a,sample_a,cell_type,batch_id

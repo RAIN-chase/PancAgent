@@ -59,7 +59,7 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
             "factor_type": "reagent",
             "factor_name": "CHIR99021",
             "standardized_name": "CHIR99021",
-            "validation_status": "has_flags",
+            "validation_status": "evidence_supported",
             "parse_status": "single_value",
             "concentration_parse_status": "single_value",
             "evidence_quote": "CHIR99021",
@@ -100,6 +100,7 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
     assert outputs["base_feature_registry"].exists()
     assert outputs["llm_proposed_feature_registry"].exists()
     assert outputs["approved_feature_registry"].exists()
+    assert outputs["predefined_feature_registry"].exists()
     assert outputs["feature_cell_provenance"].exists()
     assert outputs["feature_discovery_audit_report"].exists()
     assert outputs["schema_validation_report"].exists()
@@ -110,6 +111,7 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
     assert outputs["standardized_protocol_representations"].exists()
     assert outputs["protocol_workflow_graphs"].exists()
     assert outputs["protocol_feature_provenance"].exists()
+    assert outputs["quantification_coverage_report"].exists()
     assert outputs["protocol_embedding"].exists()
     assert outputs["protocol_cluster_report"].exists()
 
@@ -117,7 +119,15 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
     assert [row["protocol_id"] for row in matrix_rows] == ["p1"]
     p1 = matrix_rows[0]
     assert p1["activin_presence"] == "1"
-    assert p1["chir_presence"] == "0"
+    assert p1["chir_presence"] == "1"
+    assert p1["all_reagent_activin_a_presence"] == "1"
+    assert p1["factor_type_reagent_presence"] == "1"
+    assert p1["action_category_add_reagent_or_factor_presence"] == "1"
+    assert p1["all_reagent_transition_activin_a_to_chir99021"] == "1"
+    assert p1["action_bigram_add_reagent_to_add_reagent"] == "1"
+    assert p1["graph_n_action_nodes"] == "2"
+    assert p1["graph_n_next_action_edges"] == "1"
+    assert p1["motif_action_add_reagent_uses_reagent_activin_a"] == "1"
     assert p1["norm_family_tgf_beta_nodal_activation_family_presence"] == "1"
     assert p1["semantic_module_definitive_endoderm_induction_presence"] == "1"
 
@@ -126,8 +136,7 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
 
     quality = json.loads(outputs["protocol_quality_filter_report"].read_text(encoding="utf-8"))
     assert quality["summary"]["n_passed_quality_filter"] == 1
-    assert quality["event_filter_report"]["n_kept_events"] == 1
-    assert quality["event_filter_report"]["rejection_reasons"]["validation_status:has_flags"] == 1
+    assert quality["event_filter_report"]["n_kept_events"] == 2
     assert quality["event_filter_report"]["rejection_reasons"]["protocol_failed_quality_filter"] == 1
     assert quality["execution_engine"] == "langgraph"
     assert [step["node"] for step in quality["step_log"]][:3] == [
@@ -143,9 +152,24 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
     graphs = json.loads(outputs["protocol_workflow_graphs"].read_text(encoding="utf-8"))
     assert graphs["schema_version"] == "protocol-workflow-graph-v1"
     assert graphs["protocols"]["p1"]["summary"]["n_stages"] == 2
+    assert any(edge["type"] == "next_action" for edge in graphs["protocols"]["p1"]["edges"])
 
     provenance = json.loads(outputs["protocol_feature_provenance"].read_text(encoding="utf-8"))
     assert provenance["protocols"]["p1"]["activin_presence"][0]["quote"] == "100 ng/ml Activin A"
+    assert provenance["protocols"]["p1"]["all_reagent_activin_a_presence"][0]["quote"] == "100 ng/ml Activin A"
+
+    coverage = json.loads(outputs["quantification_coverage_report"].read_text(encoding="utf-8"))
+    assert coverage["status"] == "pass"
+    assert coverage["reagent_coverage"]["missing_reagents"] == []
+    assert coverage["factor_type_coverage"]["missing_factor_types"] == []
+    assert coverage["action_category_coverage"]["missing_action_categories"] == []
+
+    predefined = json.loads(outputs["predefined_feature_registry"].read_text(encoding="utf-8"))
+    assert predefined["schema_version"] == "predefined-feature-registry-v1"
+    predefined_names = {feature["feature_name"] for feature in predefined["features"]}
+    assert "all_reagent_activin_a_presence" in predefined_names
+    assert "factor_type_reagent_presence" in predefined_names
+    assert "action_category_add_reagent_or_factor_presence" in predefined_names
 
     embedding_rows = list(csv.DictReader(outputs["protocol_embedding"].open(encoding="utf-8")))
     assert embedding_rows[0]["protocol_id"] == "p1"
@@ -609,3 +633,52 @@ def test_protocol_query_layer_finds_author_year_with_normalized_tokens(tmp_path:
     hits = ProtocolQueryEngine(tmp_path).find_protocols("Akgün 2024")
     assert hits[0]["protocol_id"] == "p1"
     assert hits[0]["matched_tokens"] == ["2024", "akgun"]
+
+def test_protocol_query_layer_generates_feature_heatmap(tmp_path: Path) -> None:
+    matrix_path = tmp_path / "protocol_feature_matrix.csv"
+    matrix_path.write_text(
+        "protocol_id,paper_id,dataset_id,protocol_name,confidence_score,comparison_ready,activin_presence,t3_presence,total_days\n"
+        "p1,paper_a,d1,Protocol A,0.9,True,1,0,7\n"
+        "p2,paper_b,d2,Protocol B,0.9,True,0,1,20\n",
+        encoding="utf-8",
+    )
+
+    result = ProtocolQueryEngine(tmp_path).plot_feature_heatmap(
+        top_n_features=3,
+        filename="test_heatmap.svg",
+        cluster_rows=True,
+        cluster_features=True,
+    )
+
+    assert result["status"] == "ok"
+    assert result["n_protocols"] == 2
+    assert result["n_features"] == 3
+    assert result["cluster_rows"] is True
+    assert result["cluster_features"] is True
+    output_path = Path(result["path"])
+    assert output_path.exists()
+    assert "<svg" in output_path.read_text(encoding="utf-8")
+
+
+def test_protocol_query_layer_generates_layered_feature_heatmaps(tmp_path: Path) -> None:
+    matrix_path = tmp_path / "protocol_feature_matrix.csv"
+    matrix_path.write_text(
+        "protocol_id,paper_id,dataset_id,protocol_name,confidence_score,comparison_ready,"
+        "semantic_module_beta_cell_maturation_presence,has_aggregation,activin_presence,"
+        "norm_family_wnt_activation_family_presence,total_days,transition_activin_to_chir,"
+        "action_category_wash_presence,factor_type_reagent_presence\n"
+        "p1,paper_a,d1,Protocol A,0.9,True,1,1,1,1,7,1,1,1\n"
+        "p2,paper_b,d2,Protocol B,0.9,True,0,0,0,0,20,0,1,1\n",
+        encoding="utf-8",
+    )
+
+    result = ProtocolQueryEngine(tmp_path).plot_layered_feature_heatmaps(
+        top_n_features_per_layer=2,
+        include_sequence_layer=True,
+        filename_prefix="layered_test",
+    )
+
+    assert result["status"] == "ok"
+    assert result["n_layers"] == 8
+    assert Path(result["index_path"]).exists()
+    assert "Layered protocol feature heatmaps" in Path(result["index_path"]).read_text(encoding="utf-8")

@@ -109,6 +109,56 @@ def explain_cell(
 
 
 @tool
+def plot_protocol_feature_heatmap(
+    output_dir: Annotated[str, InjectedState("output_dir")],
+    protocol_ids: list[str] | None = None,
+    features: list[str] | None = None,
+    top_n_features: int = 50,
+    normalize: str = "minmax",
+    filename: str = "",
+    cluster_rows: bool = False,
+    cluster_features: bool = False,
+) -> dict[str, Any]:
+    """Create an SVG heatmap from protocol_feature_matrix.csv, optionally clustered by protocol and feature similarity."""
+
+    return _engine(output_dir).plot_feature_heatmap(
+        protocol_ids=protocol_ids or [],
+        features=features or [],
+        top_n_features=top_n_features,
+        normalize=normalize,
+        filename=filename,
+        cluster_rows=cluster_rows,
+        cluster_features=cluster_features,
+    )
+
+
+@tool
+def plot_layered_protocol_feature_heatmaps(
+    output_dir: Annotated[str, InjectedState("output_dir")],
+    protocol_ids: list[str] | None = None,
+    layers: list[str] | None = None,
+    top_n_features_per_layer: int = 40,
+    normalize: str = "minmax",
+    cluster_rows: bool = True,
+    cluster_features: bool = True,
+    include_sequence_layer: bool = False,
+    filename_prefix: str = "protocol_feature_layer",
+) -> dict[str, Any]:
+    """Create grouped SVG heatmaps for semantic, workflow, reagent, normalized-family, and timing/exposure features."""
+
+    return _engine(output_dir).plot_layered_feature_heatmaps(
+        protocol_ids=protocol_ids or [],
+        layers=layers or [],
+        top_n_features_per_layer=top_n_features_per_layer,
+        normalize=normalize,
+        cluster_rows=cluster_rows,
+        cluster_features=cluster_features,
+        include_sequence_layer=include_sequence_layer,
+        filename_prefix=filename_prefix,
+    )
+
+
+@tool
 def propose_feature_specs_context(
     output_dir: Annotated[str, InjectedState("output_dir")],
     protocol_ids: list[str] | None = None,
@@ -126,6 +176,8 @@ TOOLS = [
     get_feature_evidence,
     query_matrix,
     explain_cell,
+    plot_protocol_feature_heatmap,
+    plot_layered_protocol_feature_heatmaps,
     propose_feature_specs_context,
 ]
 

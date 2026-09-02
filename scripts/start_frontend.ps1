@@ -1,5 +1,8 @@
 param(
-  [int]$Port = 5173
+  [string]$HostAddress = "0.0.0.0",
+  [int]$Port = 5173,
+  [string]$LangGraphApiUrl = "",
+  [string]$AllowedDevOrigins = "10.203.168.222"
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,4 +12,17 @@ if (-not (Test-Path -LiteralPath ".env.local")) {
   Copy-Item -LiteralPath ".env.local.example" -Destination ".env.local"
 }
 
-pnpm dev --port $Port --hostname 127.0.0.1
+if ($LangGraphApiUrl) {
+  $lines = @(
+    "NEXT_PUBLIC_API_URL=$LangGraphApiUrl",
+    "NEXT_PUBLIC_ASSISTANT_ID=protocol_chat",
+    "NEXT_PUBLIC_AUTH_SCHEME="
+  )
+  Set-Content -LiteralPath ".env.local" -Value $lines -Encoding UTF8
+}
+
+if ($AllowedDevOrigins) {
+  $env:NEXT_ALLOWED_DEV_ORIGINS = $AllowedDevOrigins
+}
+
+pnpm dev --port $Port --hostname $HostAddress

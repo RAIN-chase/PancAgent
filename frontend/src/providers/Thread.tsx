@@ -50,10 +50,11 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const [threadsLoading, setThreadsLoading] = useState(false);
 
   const getThreads = useCallback(async (): Promise<Thread[]> => {
+    const resolvedApiUrl = apiUrl || envApiUrl;
     const resolvedAssistantId = assistantId || envAssistantId;
-    if (!apiUrl || !resolvedAssistantId) return [];
+    if (!resolvedApiUrl || !resolvedAssistantId) return [];
     const client = createClient(
-      apiUrl,
+      resolvedApiUrl,
       getApiKey() ?? undefined,
       authScheme || undefined,
     );
@@ -66,7 +67,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     });
 
     return threads;
-  }, [apiUrl, assistantId, authScheme, envAssistantId]);
+  }, [apiUrl, assistantId, authScheme, envApiUrl, envAssistantId]);
 
   const value = {
     getThreads,

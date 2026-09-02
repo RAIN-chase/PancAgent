@@ -34,7 +34,7 @@ docs/
 
 Layer responsibilities:
 
-- `frontend/`: UI only. It sends HTTP requests to the backend and displays results.
+- `frontend/`: agent-chat-ui Next.js UI. It connects to LangGraph Server for chat and tool-call visualization.
 - `backend API`: connects frontend requests to local Agent/query operations.
 - `LangGraph`: performs the actual agent work inside the backend.
 - `ProtocolAnalysisAgent`: already runs as an executable LangGraph `StateGraph`.
@@ -56,7 +56,7 @@ export_results
 Core agents:
 
 - `ProtocolAnalysisAgent`: reads Agent1 evidence-grounded artifacts and summarizes protocol / stage / factor differences.
-- `H5ADAnalysisAgent`: reads the h5ad manifest and runs pluggable h5ad analysis tools. The initial implementation emits manifest-based structured placeholders when h5ad dependencies or input files are unavailable.
+- `DataAnalysisAgent`: reads the h5ad manifest and runs pluggable data analysis tools. The initial implementation emits manifest-based structured placeholders when h5ad dependencies or input files are unavailable.
 - `IntegrationOptimizationAgent`: integrates protocol variables and single-cell phenotype summaries into evidence-labeled protocol recommendations.
 
 ## LangGraph Workflow
@@ -96,29 +96,42 @@ The server graph exposes a message-based chat agent with visible tool calls:
 - `get_feature_evidence`
 - `query_matrix`
 - `explain_cell`
+- `plot_protocol_feature_heatmap`
 - `propose_feature_specs_context`
 
-Start a local LangGraph server from the repository root:
+Start a local/LAN LangGraph server from the repository root:
 
 ```powershell
 cd E:\workspace\Pancreas\Agents_test
-.\scripts\start_langgraph_server.ps1 -Port 2024 -OutputDir "runs\protocol_analysis_agent_simplified_autofeatures"
+.\scripts\start_langgraph_server.ps1 -HostAddress 0.0.0.0 -Port 2024 -OutputDir "runs\protocol_analysis_agent_simplified_autofeatures"
 ```
 
-Then connect `agent-chat-ui` to the local LangGraph server and select the `protocol_chat` graph. The graph accepts standard chat `messages` and streams planner, tool, and answer node updates.
+Then connect `agent-chat-ui` to the LangGraph server and select the `protocol_chat` graph. The graph accepts standard chat `messages` and streams LLM/tool/answer updates.
 
-The current local frontend shell is static. Start it with:
+For LAN access, do not use `0.0.0.0` in the browser or frontend env. Use the machine LAN IP, for example:
+
+```env
+NEXT_PUBLIC_API_URL=http://10.203.168.222:2024
+NEXT_PUBLIC_ASSISTANT_ID=protocol_chat
+NEXT_PUBLIC_AUTH_SCHEME=
+```
+
+Start the Next.js frontend from the repository root:
 
 ```powershell
-.\scripts\start_frontend_static.ps1 -Port 5173
+.\scripts\start_frontend.ps1 -HostAddress 0.0.0.0 -Port 5173
 ```
 
-For all commands above, the scripts run through the `protocol_agent` conda environment.
+Open the frontend with the real host address, for example `http://10.203.168.222:5173`. If the browser previously stored another LangGraph URL, clear the agent-chat-ui setup in browser local storage or enter the LAN API URL again.
+
+For all commands above, the backend scripts call the `protocol_agent` environment executables directly instead of `conda run`, avoiding Windows console encoding crashes.
 
 ## Agent Subgraph Diagram
 
 The first-pass multi-agent subgraph design is stored in `docs/agent_subgraphs.md`
 and generated from `protocol_optimization_agent.subgraphs`.
+
+The current project architecture, implemented technical details, completed work, and planned orchestrator direction are documented in [docs/current_project_architecture.md](E:/workspace/Pancreas/Agents_test/docs/current_project_architecture.md).
 
 In IPython or Jupyter:
 
@@ -157,7 +170,7 @@ Run the Protocol Analysis Agent alone against the minimal Agent1 protocol inputs
 protocol-analysis-agent --input-dir "inputs/Protocols inputs"
 ```
 
-This emits the first quantitative `Protocol x protocol features` matrix, filtered factor events, protocol relationships, and a protocol knowledge graph.
+This emits the first quantitative `Protocol x protocol features` matrix, filtered factor events, protocol relationships, and an Organoid-UWL-inspired protocol knowledge graph. The graph is the low-loss protocol representation; the matrix is a deterministic projection compiled from graph nodes, item-role edges, action order, reagent order, motifs, timing, and provenance.
 
 `ProtocolAnalysisAgent.run()` now executes an internal LangGraph `StateGraph`:
 
@@ -190,8 +203,9 @@ Protocol Analysis Agent outputs:
 - `llm_audit_report.json`: contradiction, duplication, fallback, and evidence-quality findings.
 - `schema_validation_report.json`: Pydantic input validation findings for protocol, stage, and factor-event records.
 - `standardized_protocol_representations.jsonl`: normalized protocol, stage, action, reagent, timing, and evidence structure.
-- `protocol_workflow_graphs.json`: per-protocol workflow graph preserving stages, actions, temporal order, dependencies, and reagent relationships.
+- `protocol_workflow_graphs.json`: per-protocol Organoid-UWL-style workflow graph preserving stages, actions, action classes, item-role edges, `next_action` order, dependencies, and reagent relationships.
 - `protocol_feature_matrix_raw.csv`: deterministic base graph-derived feature matrix before optional FeatureSpec expansion.
+- `predefined_feature_registry.json`: run-specific predefined feature definitions for all accepted reagents, factor types, and action categories.
 - `base_feature_registry.json`: base feature specs copied into the run output.
 - `llm_proposed_feature_registry.json`: unapproved LLM-proposed feature specs for human review.
 - `approved_feature_registry.json`: feature specs allowed to enter the final matrix.
@@ -200,6 +214,7 @@ Protocol Analysis Agent outputs:
 - `feature_discovery_audit_report.json`: validation and consolidation report for feature discovery.
 - `protocol_feature_matrix.csv`: quantitative `Protocol x Feature` matrix for comparison, clustering, retrieval, and downstream modeling.
 - `protocol_feature_provenance.json`: feature-to-source traceability for every generated protocol feature.
+- `quantification_coverage_report.json`: coverage audit confirming accepted reagents, factor types, action categories, and provenance are represented in the matrix.
 - `protocol_similarity_matrix.csv`: pairwise protocol similarity from binary graph/workflow/reagent features.
 - `protocol_embedding.csv`: deterministic first-pass low-dimensional protocol embedding and cluster label.
 - `protocol_cluster_report.json`: cluster/category summary.

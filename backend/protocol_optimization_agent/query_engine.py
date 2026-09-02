@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import html
 import json
+import math
 import re
 import unicodedata
 from collections import defaultdict
@@ -202,6 +204,128 @@ class ProtocolQueryEngine:
                 for finding in self.get_audit_findings(protocol_id)
                 if str(finding.get("feature") or "") == feature
             ],
+        }
+
+    def plot_feature_heatmap(
+        self,
+        protocol_ids: list[str] | None = None,
+        features: list[str] | None = None,
+        top_n_features: int = 50,
+        normalize: str = "minmax",
+        filename: str = "",
+        cluster_rows: bool = False,
+        cluster_features: bool = False,
+    ) -> dict[str, Any]:
+        rows = _select_matrix_rows(self.matrix_rows, protocol_ids or [])
+        if not rows:
+            return {"status": "no_data", "reason": "No matching protocol rows in protocol_feature_matrix.csv."}
+
+        numeric_features = _select_numeric_features(rows, features or [], max(1, top_n_features))
+        if not numeric_features:
+            return {"status": "no_data", "reason": "No numeric feature columns available for heatmap."}
+
+        matrix = [[_to_float(row.get(feature)) or 0.0 for feature in numeric_features] for row in rows]
+        rendered_values = _normalize_matrix_by_column(matrix, normalize)
+        protocol_labels = [str(row.get("protocol_id") or f"protocol_{idx + 1}") for idx, row in enumerate(rows)]
+
+        if cluster_rows and len(rendered_values) > 1:
+            row_order = _cluster_order(rendered_values)
+            protocol_labels = [protocol_labels[idx] for idx in row_order]
+            matrix = [matrix[idx] for idx in row_order]
+            rendered_values = [rendered_values[idx] for idx in row_order]
+
+        if cluster_features and numeric_features and len(numeric_features) > 1:
+            feature_order = _cluster_order(_transpose(rendered_values))
+            numeric_features = [numeric_features[idx] for idx in feature_order]
+            matrix = [[row[idx] for idx in feature_order] for row in matrix]
+            rendered_values = [[row[idx] for idx in feature_order] for row in rendered_values]
+
+        output_path = self.output_dir / "visualizations" / (filename or _default_heatmap_filename(protocol_labels, numeric_features))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            _render_heatmap_svg(
+                protocol_labels=protocol_labels,
+                feature_labels=numeric_features,
+                values=rendered_values,
+                raw_values=matrix,
+                title=f"Protocol feature matrix heatmap ({normalize})",
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "status": "ok",
+            "plot_type": "feature_matrix_heatmap",
+            "path": str(output_path),
+            "n_protocols": len(protocol_labels),
+            "n_features": len(numeric_features),
+            "protocol_ids": protocol_labels,
+            "features": numeric_features,
+            "normalization": normalize,
+            "cluster_rows": cluster_rows,
+            "cluster_features": cluster_features,
+            "source_matrix": str(self.output_dir / "protocol_feature_matrix.csv"),
+        }
+
+    def plot_layered_feature_heatmaps(
+        self,
+        protocol_ids: list[str] | None = None,
+        layers: list[str] | None = None,
+        top_n_features_per_layer: int = 40,
+        normalize: str = "minmax",
+        cluster_rows: bool = True,
+        cluster_features: bool = True,
+        include_sequence_layer: bool = False,
+        filename_prefix: str = "protocol_feature_layer",
+    ) -> dict[str, Any]:
+        rows = _select_matrix_rows(self.matrix_rows, protocol_ids or [])
+        if not rows:
+            return {"status": "no_data", "reason": "No matching protocol rows in protocol_feature_matrix.csv."}
+
+        available_layers = _feature_layers(rows, include_sequence_layer=include_sequence_layer)
+        requested_layers = [layer for layer in layers or available_layers if layer in available_layers]
+        layer_results: list[dict[str, Any]] = []
+        for layer in requested_layers:
+            layer_features = available_layers[layer]
+            if not layer_features:
+                continue
+            result = self.plot_feature_heatmap(
+                protocol_ids=protocol_ids or [],
+                features=layer_features,
+                top_n_features=top_n_features_per_layer,
+                normalize=normalize,
+                filename=f"{filename_prefix}_{layer}.svg",
+                cluster_rows=cluster_rows,
+                cluster_features=cluster_features,
+            )
+            if result.get("status") == "ok":
+                result["layer"] = layer
+                result["layer_label"] = _feature_layer_label(layer)
+                layer_results.append(result)
+
+        if not layer_results:
+            return {"status": "no_data", "reason": "No numeric feature layers available for heatmap."}
+
+        index_path = self.output_dir / "visualizations" / f"{filename_prefix}_index.html"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(
+            _render_layered_heatmap_index(
+                title="Layered protocol feature heatmaps",
+                layer_results=layer_results,
+                source_matrix=str(self.output_dir / "protocol_feature_matrix.csv"),
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "status": "ok",
+            "plot_type": "layered_feature_matrix_heatmaps",
+            "index_path": str(index_path),
+            "layers": layer_results,
+            "n_layers": len(layer_results),
+            "n_protocols": len(rows),
+            "normalization": normalize,
+            "cluster_rows": cluster_rows,
+            "cluster_features": cluster_features,
+            "source_matrix": str(self.output_dir / "protocol_feature_matrix.csv"),
         }
 
     def propose_feature_specs_context(self, protocol_ids: list[str] | None = None, limit_events: int = 200) -> dict[str, Any]:
@@ -528,3 +652,297 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+def _select_matrix_rows(rows: list[dict[str, str]], protocol_ids: list[str]) -> list[dict[str, str]]:
+    wanted = {str(protocol_id) for protocol_id in protocol_ids if str(protocol_id)}
+    if not wanted:
+        return rows
+    return [row for row in rows if str(row.get("protocol_id") or "") in wanted]
+
+
+def _select_numeric_features(rows: list[dict[str, str]], requested: list[str], top_n_features: int) -> list[str]:
+    metadata = _metadata_keys()
+    candidate_features = requested or sorted(set().union(*(set(row) for row in rows)) - metadata)
+    scored: list[tuple[float, str]] = []
+    for feature in candidate_features:
+        values = [_to_float(row.get(feature)) for row in rows]
+        numeric_values = [value for value in values if value is not None and math.isfinite(value)]
+        if not numeric_values:
+            continue
+        variance = _variance(numeric_values)
+        nonzero_fraction = sum(1 for value in numeric_values if value != 0) / len(numeric_values)
+        score = variance + nonzero_fraction * 0.01
+        scored.append((score, feature))
+    return [feature for _, feature in sorted(scored, key=lambda item: (-item[0], item[1]))[:top_n_features]]
+
+
+def _feature_layers(rows: list[dict[str, str]], include_sequence_layer: bool) -> dict[str, list[str]]:
+    features = sorted(set().union(*(set(row) for row in rows)) - _metadata_keys())
+    layers: dict[str, list[str]] = {
+        "semantic": [],
+        "workflow": [],
+        "action_category": [],
+        "factor_type": [],
+        "reagent": [],
+        "normalized_family": [],
+        "temporal_exposure": [],
+        "graph_topology": [],
+        "motif": [],
+    }
+    if include_sequence_layer:
+        layers["sequence"] = []
+
+    for feature in features:
+        layer = _feature_layer(feature)
+        if layer in layers:
+            layers[layer].append(feature)
+    return {layer: layer_features for layer, layer_features in layers.items() if layer_features}
+
+
+def _feature_layer(feature: str) -> str:
+    if feature.startswith("semantic_module_") or feature in {"n_semantic_stage_annotations", "n_strategy_modules"}:
+        return "semantic"
+    if feature.startswith("action_category_"):
+        return "action_category"
+    if feature.startswith("factor_type_"):
+        return "factor_type"
+    if feature.startswith("graph_"):
+        return "graph_topology"
+    if feature.startswith("motif_"):
+        return "motif"
+    if feature.startswith("all_reagent_") and feature.endswith(("_start_day", "_end_day", "_total_exposure")):
+        return "temporal_exposure"
+    if feature.startswith("all_reagent_"):
+        return "reagent"
+    if feature.startswith("norm_family_"):
+        return "normalized_family"
+    if feature.startswith(("transition_", "action_bigram_", "factor_type_bigram_", "all_reagent_transition_")):
+        return "sequence"
+    if feature.startswith(("num_", "has_", "requires_")):
+        return "workflow"
+    if (
+        feature in {"total_days", "number_of_stages", "stage_transition_number", "max_stage_duration", "mean_stage_duration"}
+        or feature.endswith("_start_day")
+        or feature.endswith("_end_day")
+        or feature.endswith("_total_exposure")
+    ):
+        return "temporal_exposure"
+    if feature.endswith(("_presence", "_max_concentration", "_n_events")):
+        return "reagent"
+    return "other"
+
+
+def _feature_layer_label(layer: str) -> str:
+    labels = {
+        "semantic": "Semantic strategy modules",
+        "workflow": "Workflow and operation features",
+        "action_category": "Standardized experimental action categories",
+        "factor_type": "Structured factor type coverage",
+        "reagent": "Canonical reagent features",
+        "normalized_family": "Normalized factor family features",
+        "temporal_exposure": "Timing and exposure features",
+        "graph_topology": "Graph topology features",
+        "motif": "Action-item motif features",
+        "sequence": "Reagent transition sequence features",
+    }
+    return labels.get(layer, layer.replace("_", " ").title())
+
+
+def _variance(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return sum((value - mean) ** 2 for value in values) / len(values)
+
+
+def _normalize_matrix_by_column(matrix: list[list[float]], normalize: str) -> list[list[float]]:
+    if not matrix:
+        return []
+    normalize = normalize.lower()
+    if normalize in {"none", "raw"}:
+        flat = [abs(value) for row in matrix for value in row]
+        max_abs = max(flat) if flat else 1.0
+        scale = max_abs or 1.0
+        return [[max(0.0, min(1.0, abs(value) / scale)) for value in row] for row in matrix]
+
+    n_cols = len(matrix[0])
+    output = [[0.0 for _ in range(n_cols)] for _ in matrix]
+    for col_idx in range(n_cols):
+        column = [row[col_idx] for row in matrix]
+        if normalize == "zscore":
+            mean = sum(column) / len(column)
+            std = math.sqrt(_variance(column)) or 1.0
+            scaled = [0.5 + ((value - mean) / std) / 4 for value in column]
+        else:
+            min_value = min(column)
+            max_value = max(column)
+            span = max_value - min_value
+            scaled = [0.0 if span == 0 else (value - min_value) / span for value in column]
+        for row_idx, value in enumerate(scaled):
+            output[row_idx][col_idx] = max(0.0, min(1.0, value))
+    return output
+
+
+def _transpose(matrix: list[list[float]]) -> list[list[float]]:
+    if not matrix:
+        return []
+    return [list(column) for column in zip(*matrix)]
+
+
+def _cluster_order(vectors: list[list[float]]) -> list[int]:
+    clusters: list[dict[str, Any]] = [{"indices": [idx], "centroid": vector[:]} for idx, vector in enumerate(vectors)]
+    if len(clusters) < 2:
+        return [idx for idx in range(len(vectors))]
+
+    while len(clusters) > 1:
+        best_pair: tuple[int, int] | None = None
+        best_distance = float("inf")
+        for left_idx in range(len(clusters)):
+            for right_idx in range(left_idx + 1, len(clusters)):
+                distance = _euclidean_distance(clusters[left_idx]["centroid"], clusters[right_idx]["centroid"])
+                if distance < best_distance:
+                    best_distance = distance
+                    best_pair = (left_idx, right_idx)
+        if best_pair is None:
+            break
+        left_idx, right_idx = best_pair
+        left = clusters[left_idx]
+        right = clusters[right_idx]
+        merged_indices = left["indices"] + right["indices"]
+        merged = {
+            "indices": merged_indices,
+            "centroid": _centroid([vectors[idx] for idx in merged_indices]),
+        }
+        for idx in sorted(best_pair, reverse=True):
+            clusters.pop(idx)
+        clusters.append(merged)
+    return clusters[0]["indices"] if clusters else []
+
+
+def _centroid(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        return []
+    n_cols = len(vectors[0])
+    return [sum(vector[col_idx] for vector in vectors) / len(vectors) for col_idx in range(n_cols)]
+
+
+def _euclidean_distance(left: list[float], right: list[float]) -> float:
+    return math.sqrt(sum((left[idx] - right[idx]) ** 2 for idx in range(min(len(left), len(right)))))
+
+
+def _default_heatmap_filename(protocol_labels: list[str], feature_labels: list[str]) -> str:
+    protocol_part = "all_protocols" if len(protocol_labels) > 3 else "_".join(_slug(label) for label in protocol_labels)
+    return f"protocol_feature_heatmap_{protocol_part}_{len(feature_labels)}features.svg"
+
+
+def _slug(value: str) -> str:
+    value = _normalize_search_text(value).replace(" ", "_")
+    return value[:40] or "protocol"
+
+
+def _render_heatmap_svg(
+    protocol_labels: list[str],
+    feature_labels: list[str],
+    values: list[list[float]],
+    raw_values: list[list[float]],
+    title: str,
+) -> str:
+    cell = 18
+    left = 180
+    top = 190
+    right = 40
+    bottom = 120
+    width = left + len(feature_labels) * cell + right
+    height = top + len(protocol_labels) * cell + bottom
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        "<style>text{font-family:Arial,sans-serif;font-size:11px;fill:#111827}.title{font-size:16px;font-weight:700}.axis{font-size:10px}.small{font-size:9px;fill:#4b5563}</style>",
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text class="title" x="20" y="28">{html.escape(title)}</text>',
+        '<text class="small" x="20" y="48">Columns are numeric protocol features selected by variance unless explicitly requested. Color intensity is normalized per feature.</text>',
+    ]
+    for col_idx, feature in enumerate(feature_labels):
+        x = left + col_idx * cell + cell * 0.65
+        parts.append(f'<text class="axis" transform="translate({x},{top - 8}) rotate(-55)" text-anchor="start">{html.escape(feature)}</text>')
+    for row_idx, protocol_id in enumerate(protocol_labels):
+        y = top + row_idx * cell + cell * 0.68
+        parts.append(f'<text class="axis" x="{left - 8}" y="{y}" text-anchor="end">{html.escape(protocol_id)}</text>')
+    for row_idx, row in enumerate(values):
+        for col_idx, value in enumerate(row):
+            raw = raw_values[row_idx][col_idx]
+            x = left + col_idx * cell
+            y = top + row_idx * cell
+            parts.append(
+                f'<rect x="{x}" y="{y}" width="{cell - 1}" height="{cell - 1}" fill="{_heatmap_color(value)}">'
+                f'<title>{html.escape(protocol_labels[row_idx])} | {html.escape(feature_labels[col_idx])}: {raw:g}</title>'
+                "</rect>"
+            )
+    legend_x = 20
+    legend_y = height - 54
+    for idx in range(80):
+        value = idx / 79
+        parts.append(f'<rect x="{legend_x + idx * 2}" y="{legend_y}" width="2" height="12" fill="{_heatmap_color(value)}"/>')
+    parts.extend([
+        f'<text class="small" x="{legend_x}" y="{legend_y + 28}">low</text>',
+        f'<text class="small" x="{legend_x + 132}" y="{legend_y + 28}">high</text>',
+        "</svg>",
+    ])
+    return "\n".join(parts)
+
+
+def _render_layered_heatmap_index(title: str, layer_results: list[dict[str, Any]], source_matrix: str) -> str:
+    cards = []
+    for result in layer_results:
+        path = Path(str(result["path"]))
+        label = html.escape(str(result.get("layer_label") or result.get("layer") or path.stem))
+        cards.append(
+            "\n".join(
+                [
+                    '<section class="layer">',
+                    f"<h2>{label}</h2>",
+                    f'<p>{int(result.get("n_features", 0))} features, {int(result.get("n_protocols", 0))} protocols</p>',
+                    f'<object data="{html.escape(path.name)}" type="image/svg+xml"></object>',
+                    "</section>",
+                ]
+            )
+        )
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8"/>',
+            f"<title>{html.escape(title)}</title>",
+            "<style>",
+            "body{margin:0;background:#f8fafc;color:#111827;font-family:Arial,sans-serif}",
+            "main{max-width:1280px;margin:0 auto;padding:24px}",
+            "h1{font-size:22px;margin:0 0 8px}",
+            "h2{font-size:16px;margin:0 0 4px}",
+            "p{font-size:12px;color:#4b5563;margin:0 0 12px}",
+            ".layer{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:16px 0}",
+            "object{width:100%;min-height:520px;border:0}",
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            f"<h1>{html.escape(title)}</h1>",
+            f"<p>Source matrix: {html.escape(source_matrix)}</p>",
+            *cards,
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _heatmap_color(value: float) -> str:
+    stops = ((247, 250, 252), (253, 186, 116), (220, 38, 38))
+    value = max(0.0, min(1.0, value))
+    if value <= 0.5:
+        local = value / 0.5
+        start, end = stops[0], stops[1]
+    else:
+        local = (value - 0.5) / 0.5
+        start, end = stops[1], stops[2]
+    rgb = tuple(round(start[idx] + (end[idx] - start[idx]) * local) for idx in range(3))
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"

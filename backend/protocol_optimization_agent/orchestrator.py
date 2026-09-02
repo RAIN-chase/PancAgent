@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from protocol_optimization_agent.agents.h5ad_analysis import H5ADAnalysisAgent
+from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
 from protocol_optimization_agent.agents.integration_optimization import IntegrationOptimizationAgent
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
 from protocol_optimization_agent.config import ProtocolOptimizationConfig
@@ -66,7 +66,7 @@ class ProtocolOptimizationAgent:
         state.log_step("analyze_protocol_factors", "ok", outputs=_stringify_paths(state.protocol_outputs))
 
     def analyze_h5ad_profiles(self, state: PipelineState) -> None:
-        agent = H5ADAnalysisAgent(self.config.output_dir / "h5ad_analysis", self.config.h5ad)
+        agent = DataAnalysisAgent(self.config.output_dir / "data_analysis", self.config.h5ad)
         state.h5ad_outputs = agent.run(state.h5ad_manifest)
         state.log_step("analyze_h5ad_profiles", "ok", outputs=_stringify_paths(state.h5ad_outputs))
 

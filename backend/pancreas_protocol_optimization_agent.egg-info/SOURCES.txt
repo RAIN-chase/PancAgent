@@ -28,7 +28,7 @@ backend/protocol_optimization_agent/state.py
 backend/protocol_optimization_agent/subgraphs.py
 backend/protocol_optimization_agent/workflow.py
 backend/protocol_optimization_agent/agents/__init__.py
-backend/protocol_optimization_agent/agents/h5ad_analysis.py
+backend/protocol_optimization_agent/agents/data_analysis.py
 backend/protocol_optimization_agent/agents/integration_optimization.py
 backend/protocol_optimization_agent/agents/protocol_analysis.py
 backend/protocol_optimization_agent/tools/__init__.py
