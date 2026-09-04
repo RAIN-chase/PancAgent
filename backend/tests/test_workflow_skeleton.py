@@ -10,7 +10,7 @@ def test_workflow_skeleton_contains_expected_nodes() -> None:
         "load_h5ad_manifest",
         "analyze_protocol_factors",
         "analyze_h5ad_profiles",
-        "integrate_protocol_and_h5ad_results",
+        "optimize_protocol_from_agent_outputs",
         "generate_improved_protocol",
         "qc_final_recommendations",
         "export_results",
@@ -19,4 +19,4 @@ def test_workflow_skeleton_contains_expected_nodes() -> None:
 
 
 def test_workflow_skeleton_is_linear_dag() -> None:
-    assert WORKFLOW_EDGES == list(zip(WORKFLOW_NODE_ORDER, WORKFLOW_NODE_ORDER[1:]))
+    assert WORKFLOW_EDGES == list(zip(WORKFLOW_NODE_ORDER, WORKFLOW_NODE_ORDER[1:], strict=False))

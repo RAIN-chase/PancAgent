@@ -91,7 +91,7 @@ class StageRecord(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def require_sort_or_time_signal(self) -> "StageRecord":
+    def require_sort_or_time_signal(self) -> StageRecord:
         if self.stage_index is None and self.day_start is None and self.day_end is None and self.duration_days is None:
             raise ValueError("stage must have stage_index or at least one temporal field")
         return self
@@ -125,16 +125,20 @@ class FactorEvent(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def require_key_factor_evidence(self) -> "FactorEvent":
-        if self.factor_type in {
-            FactorType.REAGENT,
-            FactorType.MEDIUM_BASE,
-            FactorType.MATRIX_OR_COATING,
-            FactorType.CULTURE_FORMAT,
-            FactorType.OPERATION,
-            FactorType.MECHANICAL_CONDITION,
-            FactorType.AGGREGATION,
-        } and not self.evidence_quote:
+    def require_key_factor_evidence(self) -> FactorEvent:
+        if (
+            self.factor_type
+            in {
+                FactorType.REAGENT,
+                FactorType.MEDIUM_BASE,
+                FactorType.MATRIX_OR_COATING,
+                FactorType.CULTURE_FORMAT,
+                FactorType.OPERATION,
+                FactorType.MECHANICAL_CONDITION,
+                FactorType.AGGREGATION,
+            }
+            and not self.evidence_quote
+        ):
             raise ValueError("key factor event requires evidence_quote")
         return self
 
@@ -274,7 +278,7 @@ class FeatureSpec(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def require_trigger_patterns(self) -> "FeatureSpec":
+    def require_trigger_patterns(self) -> FeatureSpec:
         if not self.trigger_patterns:
             raise ValueError("trigger_patterns are required")
         if not self.source_fields:

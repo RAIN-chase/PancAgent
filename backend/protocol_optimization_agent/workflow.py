@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Callable, TypedDict
+from collections.abc import Callable
+from typing import Any, TypedDict, cast
 
 
 class WorkflowState(TypedDict, total=False):
@@ -19,7 +20,7 @@ class WorkflowState(TypedDict, total=False):
     h5ad_manifest: list[dict[str, Any]]
     protocol_outputs: dict[str, str]
     h5ad_outputs: dict[str, str]
-    integration_outputs: dict[str, str]
+    optimization_outputs: dict[str, str]
     warnings: list[str]
     step_log: list[dict[str, Any]]
 
@@ -33,13 +34,13 @@ WORKFLOW_NODE_ORDER = [
     "load_h5ad_manifest",
     "analyze_protocol_factors",
     "analyze_h5ad_profiles",
-    "integrate_protocol_and_h5ad_results",
+    "optimize_protocol_from_agent_outputs",
     "generate_improved_protocol",
     "qc_final_recommendations",
     "export_results",
 ]
 
-WORKFLOW_EDGES = list(zip(WORKFLOW_NODE_ORDER, WORKFLOW_NODE_ORDER[1:]))
+WORKFLOW_EDGES = list(zip(WORKFLOW_NODE_ORDER, WORKFLOW_NODE_ORDER[1:], strict=False))
 
 
 def validate_inputs(state: WorkflowState) -> WorkflowState:
@@ -62,7 +63,7 @@ def analyze_h5ad_profiles(state: WorkflowState) -> WorkflowState:
     return state
 
 
-def integrate_protocol_and_h5ad_results(state: WorkflowState) -> WorkflowState:
+def optimize_protocol_from_agent_outputs(state: WorkflowState) -> WorkflowState:
     return state
 
 
@@ -84,7 +85,7 @@ WORKFLOW_NODES: dict[str, WorkflowNode] = {
     "load_h5ad_manifest": load_h5ad_manifest,
     "analyze_protocol_factors": analyze_protocol_factors,
     "analyze_h5ad_profiles": analyze_h5ad_profiles,
-    "integrate_protocol_and_h5ad_results": integrate_protocol_and_h5ad_results,
+    "optimize_protocol_from_agent_outputs": optimize_protocol_from_agent_outputs,
     "generate_improved_protocol": generate_improved_protocol,
     "qc_final_recommendations": qc_final_recommendations,
     "export_results": export_results,
@@ -107,7 +108,7 @@ def build_langgraph_workflow(compile_graph: bool = True) -> Any:
 
     graph = StateGraph(WorkflowState)
     for node_name in WORKFLOW_NODE_ORDER:
-        graph.add_node(node_name, WORKFLOW_NODES[node_name])
+        graph.add_node(node_name, cast(Any, WORKFLOW_NODES[node_name]))
 
     graph.add_edge(START, WORKFLOW_NODE_ORDER[0])
     for source, target in WORKFLOW_EDGES:

@@ -4,6 +4,10 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from protocol_optimization_agent.io import write_csv_dicts, write_json, write_jsonl
+from protocol_optimization_agent.tools.external_data_tools import (
+    build_external_tool_inventory,
+    get_external_data_analysis_tools,
+)
 from protocol_optimization_agent.tools.h5ad_tools import (
     DATA_ANALYSIS_TOOL_REGISTRY,
     build_placeholder_composition_rows,
@@ -12,8 +16,12 @@ from protocol_optimization_agent.tools.h5ad_tools import (
     build_placeholder_regulatory_rows,
     build_placeholder_trajectory_rows,
     compare_reference_similarity_placeholder,
+    compute_cell_type_composition,
+    compute_differential_expression,
+    compute_marker_scores,
+    inspect_h5ad_dataset,
+    query_gene_expression,
     score_gene_program_maturity_placeholder,
-    summarize_h5ad_manifest_entry,
     validate_data_analysis_inputs,
 )
 
@@ -30,10 +38,13 @@ class DataAnalysisState(TypedDict, total=False):
     composition_rows: list[dict[str, Any]]
     marker_rows: list[dict[str, Any]]
     gene_program_rows: list[dict[str, Any]]
+    gene_expression_rows: list[dict[str, Any]]
+    differential_expression_rows: list[dict[str, Any]]
     maturity_rows: list[dict[str, Any]]
     similarity_rows: list[dict[str, Any]]
     regulatory_rows: list[dict[str, Any]]
     trajectory_rows: list[dict[str, Any]]
+    external_tool_inventory: list[dict[str, Any]]
     protocol_summary_rows: list[dict[str, Any]]
     quantitative_comparison_report: dict[str, Any]
     limitations: list[dict[str, Any]]
@@ -55,11 +66,14 @@ class DataAnalysisAgent:
         h5ad_config: dict[str, Any] | None = None,
         reference_atlas_path: Path | str | None = None,
         gene_programs: dict[str, Any] | None = None,
+        project_root: Path | str | None = None,
     ) -> None:
         self.output_dir = output_dir
         self.h5ad_config = h5ad_config or {}
         self.reference_atlas_path = Path(reference_atlas_path) if reference_atlas_path else None
         self.gene_programs = gene_programs or self.h5ad_config.get("gene_programs", {}) or {}
+        self.project_root = Path(project_root) if project_root else Path.cwd()
+        self.callable_tools = get_external_data_analysis_tools(self.project_root)
 
     def run(
         self,
@@ -79,6 +93,21 @@ class DataAnalysisAgent:
         final_state = self.build_langgraph().invoke(initial_state)
         return final_state["outputs"]
 
+    def call_tool(self, tool_id: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Call one registered external data-analysis tool wrapper by id."""
+        if tool_id not in self.callable_tools:
+            return {
+                "tool_id": tool_id,
+                "status": "unknown_tool",
+                "available_tools": sorted(self.callable_tools),
+            }
+        return self.callable_tools[tool_id](
+            {
+                "project_root": str(self.project_root),
+                **(config or {}),
+            }
+        )
+
     def build_langgraph(self, compile_graph: bool = True) -> Any:
         try:
             from langgraph.graph import END, START, StateGraph
@@ -94,6 +123,7 @@ class DataAnalysisAgent:
         graph.add_node("maturity_scoring", self._node_maturity_scoring)
         graph.add_node("reference_similarity_analysis", self._node_reference_similarity_analysis)
         graph.add_node("regulatory_and_trajectory_placeholders", self._node_regulatory_and_trajectory_placeholders)
+        graph.add_node("external_tool_inventory", self._node_external_tool_inventory)
         graph.add_node("aggregate_quantitative_comparison", self._node_aggregate_quantitative_comparison)
         graph.add_node("data_analysis_audit", self._node_data_analysis_audit)
         graph.add_node("export_results", self._node_export_results)
@@ -106,7 +136,8 @@ class DataAnalysisAgent:
         graph.add_edge("marker_and_gene_program_scoring", "maturity_scoring")
         graph.add_edge("maturity_scoring", "reference_similarity_analysis")
         graph.add_edge("reference_similarity_analysis", "regulatory_and_trajectory_placeholders")
-        graph.add_edge("regulatory_and_trajectory_placeholders", "aggregate_quantitative_comparison")
+        graph.add_edge("regulatory_and_trajectory_placeholders", "external_tool_inventory")
+        graph.add_edge("external_tool_inventory", "aggregate_quantitative_comparison")
         graph.add_edge("aggregate_quantitative_comparison", "data_analysis_audit")
         graph.add_edge("data_analysis_audit", "export_results")
         graph.add_edge("export_results", END)
@@ -130,9 +161,9 @@ class DataAnalysisAgent:
         summaries: list[dict[str, Any]] = []
         limitations: list[dict[str, Any]] = []
         for row in state.get("normalized_manifest_rows", []):
-            result = summarize_h5ad_manifest_entry(row, state.get("h5ad_config", {}))
-            summaries.append(result["summary"])
-            limitations.extend(result["limitations"])
+            result = inspect_h5ad_dataset(row, state.get("h5ad_config", {}))
+            summaries.append(_dataset_summary_from_inspection(row, result))
+            limitations.extend(result.get("limitations", []))
         return {
             **state,
             "dataset_summaries": summaries,
@@ -151,7 +182,8 @@ class DataAnalysisAgent:
     def _node_cell_type_composition_analysis(self, state: DataAnalysisState) -> DataAnalysisState:
         rows: list[dict[str, Any]] = []
         for row in state.get("normalized_manifest_rows", []):
-            rows.extend(build_placeholder_composition_rows(row))
+            computed = compute_cell_type_composition(row, state.get("h5ad_config", {}))
+            rows.extend(computed if computed else build_placeholder_composition_rows(row))
         return {
             **state,
             "composition_rows": rows,
@@ -161,13 +193,38 @@ class DataAnalysisAgent:
     def _node_marker_and_gene_program_scoring(self, state: DataAnalysisState) -> DataAnalysisState:
         marker_rows: list[dict[str, Any]] = []
         gene_program_rows: list[dict[str, Any]] = []
+        gene_expression_rows: list[dict[str, Any]] = []
+        differential_expression_rows: list[dict[str, Any]] = []
+        h5ad_config = state.get("h5ad_config", {})
+        marker_sets = h5ad_config.get("marker_sets", {})
+        query_genes = h5ad_config.get("query_genes", [])
+        expression_groupby = h5ad_config.get("expression_groupby") or h5ad_config.get("groupby")
+        de_config = h5ad_config.get("differential_expression", {})
         for row in state.get("normalized_manifest_rows", []):
-            marker_rows.extend(build_placeholder_marker_score_rows(row))
-            gene_program_rows.extend(build_placeholder_gene_program_rows(row, state.get("gene_programs", {})))
+            if marker_sets:
+                marker_rows.extend(compute_marker_scores(row, h5ad_config, marker_sets, groupby=expression_groupby))
+            else:
+                marker_rows.extend(build_placeholder_marker_score_rows(row))
+            gene_program_rows.extend(_compute_gene_program_scores(row, h5ad_config, state.get("gene_programs", {}), expression_groupby))
+            if query_genes:
+                gene_expression_rows.extend(query_gene_expression(row, h5ad_config, query_genes, groupby=expression_groupby))
+            if de_config:
+                differential_expression_rows.extend(
+                    compute_differential_expression(
+                        row,
+                        h5ad_config,
+                        groupby=str(de_config.get("groupby") or expression_groupby or ""),
+                        group_a=str(de_config.get("group_a") or ""),
+                        group_b=str(de_config.get("group_b") or ""),
+                        genes=de_config.get("genes") or query_genes or None,
+                    )
+                )
         return {
             **state,
             "marker_rows": marker_rows,
             "gene_program_rows": gene_program_rows,
+            "gene_expression_rows": gene_expression_rows,
+            "differential_expression_rows": differential_expression_rows,
             "step_log": _append_step(state, "marker_and_gene_program_scoring"),
         }
 
@@ -204,17 +261,28 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "regulatory_and_trajectory_placeholders"),
         }
 
+    def _node_external_tool_inventory(self, state: DataAnalysisState) -> DataAnalysisState:
+        return {
+            **state,
+            "external_tool_inventory": build_external_tool_inventory(self.project_root),
+            "step_log": _append_step(state, "external_tool_inventory"),
+        }
+
     def _node_aggregate_quantitative_comparison(self, state: DataAnalysisState) -> DataAnalysisState:
         protocol_summary_rows = _build_protocol_summary_rows(state.get("dataset_summaries", []))
         report = {
             "schema_version": "data-analysis-comparison-report-v1",
             "summary": {
                 "n_datasets": len(state.get("dataset_summaries", [])),
-                "n_protocols": len({row.get("protocol_id") for row in state.get("dataset_summaries", []) if row.get("protocol_id")}),
+                "n_protocols": len(
+                    {row.get("protocol_id") for row in state.get("dataset_summaries", []) if row.get("protocol_id")}
+                ),
                 "n_gene_program_lineages": len(state.get("gene_programs", {})),
                 "analysis_status": "framework_ready_numeric_tools_pending",
             },
             "tool_registry": DATA_ANALYSIS_TOOL_REGISTRY,
+            "external_tool_inventory": state.get("external_tool_inventory", []),
+            "callable_tools": sorted(self.callable_tools),
             "comparison_axes": [
                 "cell_type_composition",
                 "marker_expression",
@@ -249,8 +317,11 @@ class DataAnalysisAgent:
         write_csv_dicts(outputs["cell_type_composition"], state.get("composition_rows", []))
         write_csv_dicts(outputs["marker_scores"], state.get("marker_rows", []))
         write_csv_dicts(outputs["gene_program_scores"], state.get("gene_program_rows", []))
+        write_csv_dicts(outputs["gene_expression_summary"], state.get("gene_expression_rows", []))
+        write_csv_dicts(outputs["differential_expression"], state.get("differential_expression_rows", []))
         write_csv_dicts(outputs["regulatory_program_scores"], state.get("regulatory_rows", []))
         write_csv_dicts(outputs["trajectory_scores"], state.get("trajectory_rows", []))
+        write_csv_dicts(outputs["external_tool_inventory"], state.get("external_tool_inventory", []))
         write_csv_dicts(outputs["data_analysis_protocol_summary"], state.get("protocol_summary_rows", []))
         write_json(
             outputs["h5ad_qc_report"],
@@ -262,8 +333,32 @@ class DataAnalysisAgent:
             },
         )
         write_json(outputs["h5ad_analysis_limitations"], {"limitations": state.get("limitations", [])})
-        write_json(outputs["data_analysis_tool_registry"], {"tools": DATA_ANALYSIS_TOOL_REGISTRY})
+        write_json(
+            outputs["data_analysis_tool_registry"],
+            {
+                "tools": DATA_ANALYSIS_TOOL_REGISTRY,
+                "external_tool_inventory": state.get("external_tool_inventory", []),
+                "callable_tools": sorted(self.callable_tools),
+            },
+        )
         write_json(outputs["data_analysis_comparison_report"], state.get("quantitative_comparison_report", {}))
+        write_json(
+            outputs["data_analysis_query_result"],
+            {
+                "schema_version": "data-analysis-query-result-v1",
+                "status": "ready_for_orchestrator_dispatch",
+                "supported_operations": [
+                    "summary",
+                    "cell_type_composition",
+                    "marker_score",
+                    "gene_expression",
+                    "differential_expression",
+                    "maturity",
+                    "reference_similarity",
+                ],
+                "output_files": {key: str(path) for key, path in outputs.items()},
+            },
+        )
         return {
             **state,
             "outputs": outputs,
@@ -278,13 +373,17 @@ class DataAnalysisAgent:
             "cell_type_composition": self.output_dir / "cell_type_composition.csv",
             "marker_scores": self.output_dir / "marker_scores.csv",
             "gene_program_scores": self.output_dir / "gene_program_scores.csv",
+            "gene_expression_summary": self.output_dir / "gene_expression_summary.csv",
+            "differential_expression": self.output_dir / "differential_expression.csv",
             "regulatory_program_scores": self.output_dir / "regulatory_program_scores.csv",
             "trajectory_scores": self.output_dir / "trajectory_scores.csv",
+            "external_tool_inventory": self.output_dir / "external_tool_inventory.csv",
             "data_analysis_protocol_summary": self.output_dir / "data_analysis_protocol_summary.csv",
             "h5ad_qc_report": self.output_dir / "h5ad_qc_report.json",
             "h5ad_analysis_limitations": self.output_dir / "h5ad_analysis_limitations.json",
             "data_analysis_tool_registry": self.output_dir / "data_analysis_tool_registry.json",
             "data_analysis_comparison_report": self.output_dir / "data_analysis_comparison_report.json",
+            "data_analysis_query_result": self.output_dir / "data_analysis_query_result.json",
         }
 
 
@@ -299,6 +398,77 @@ def _build_qc_row(summary: dict[str, Any]) -> dict[str, Any]:
         "lineage_column": summary.get("lineage_column", ""),
         "analysis_status": summary.get("analysis_status", ""),
     }
+
+
+def _dataset_summary_from_inspection(row: dict[str, Any], inspection: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "protocol_id": row.get("protocol_id", ""),
+        "dataset_id": row.get("dataset_id", ""),
+        "condition_id": row.get("condition_id", ""),
+        "sample_id": row.get("sample_id", ""),
+        "h5ad_path": row.get("h5ad_path", ""),
+        "h5ad_file_exists": Path(str(row.get("h5ad_path", ""))).exists() if row.get("h5ad_path") else False,
+        "dataset_kind": row.get("dataset_kind", ""),
+        "analysis_status": inspection.get("status", ""),
+        "n_obs": inspection.get("n_obs", ""),
+        "n_vars": inspection.get("n_vars", ""),
+        "cell_type_column": row.get("cell_type_column", ""),
+        "batch_column": row.get("batch_column", ""),
+        "lineage_column": row.get("lineage_column", ""),
+        "missing_metadata_columns": "|".join(inspection.get("missing_metadata_columns", [])),
+    }
+
+
+def _compute_gene_program_scores(
+    row: dict[str, Any],
+    h5ad_config: dict[str, Any],
+    gene_programs: dict[str, Any],
+    groupby: str | None,
+) -> list[dict[str, Any]]:
+    if not gene_programs:
+        return build_placeholder_gene_program_rows(row, gene_programs)
+    marker_sets: dict[str, list[str]] = {}
+    program_lineages: dict[str, str] = {}
+    for lineage, programs in gene_programs.items():
+        if isinstance(programs, dict):
+            for program_name, genes in programs.items():
+                key = f"{lineage}:{program_name}"
+                marker_sets[key] = _program_genes(genes)
+                program_lineages[key] = str(lineage)
+        elif isinstance(programs, list):
+            key = f"{lineage}:default_program"
+            marker_sets[key] = [str(gene) for gene in programs]
+            program_lineages[key] = str(lineage)
+    score_rows = compute_marker_scores(row, h5ad_config, marker_sets, groupby=groupby)
+    rows: list[dict[str, Any]] = []
+    for score in score_rows:
+        marker_set = str(score.get("marker_set", ""))
+        _, _, program_name = marker_set.partition(":")
+        rows.append(
+            {
+                "protocol_id": score.get("protocol_id", ""),
+                "dataset_id": score.get("dataset_id", ""),
+                "condition_id": score.get("condition_id", ""),
+                "sample_id": score.get("sample_id", ""),
+                "lineage": program_lineages.get(marker_set, ""),
+                "gene_program": program_name or marker_set,
+                "groupby": score.get("groupby", ""),
+                "group": score.get("group", ""),
+                "n_genes_input": score.get("n_genes_input", ""),
+                "n_genes_found": score.get("n_genes_found", ""),
+                "program_score": score.get("score", ""),
+                "status": score.get("status", ""),
+            }
+        )
+    return rows
+
+
+def _program_genes(program: Any) -> list[str]:
+    if isinstance(program, dict) and isinstance(program.get("genes"), list):
+        return [str(gene) for gene in program["genes"]]
+    if isinstance(program, list):
+        return [str(gene) for gene in program]
+    return []
 
 
 def _build_protocol_summary_rows(dataset_summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -149,11 +149,45 @@ def test_load_protocol_analysis_inputs_reconstructs_from_sqlite(tmp_path: Path) 
     )
     con.execute(
         "insert into stages values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ("s1", "p1", 1, "Stage 1", 0, 3, 3, "hPSC", "DE", "medium", "2D", "Matrigel", "culture cells", "stage quote", "high", "{}"),
+        (
+            "s1",
+            "p1",
+            1,
+            "Stage 1",
+            0,
+            3,
+            3,
+            "hPSC",
+            "DE",
+            "medium",
+            "2D",
+            "Matrigel",
+            "culture cells",
+            "stage quote",
+            "high",
+            "{}",
+        ),
     )
     con.execute(
         "insert into reagents values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ("r1", "p1", "s1", "Activin A", "Activin A", "growth factor", "TGF-beta", "100", "ng/ml", "day 0-3", 0, 3, 0, "Activin quote", "high", "{}"),
+        (
+            "r1",
+            "p1",
+            "s1",
+            "Activin A",
+            "Activin A",
+            "growth factor",
+            "TGF-beta",
+            "100",
+            "ng/ml",
+            "day 0-3",
+            0,
+            3,
+            0,
+            "Activin quote",
+            "high",
+            "{}",
+        ),
     )
     con.execute(
         "insert into papers values (?,?,?,?,?,?,?,?,?,?)",

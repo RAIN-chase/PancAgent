@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from protocol_optimization_agent.llm_client import LLMClient, OfflineLLMClient
 from protocol_optimization_agent.schemas import ActionType, Confidence, FactorType, NormalizedFactor
 
-
 NORMALIZATION_ONTOLOGY: dict[str, dict[str, Any]] = {
     "TGF-beta/ALK5 inhibition family": {
         "aliases": ("sb431542", "a83-01", "alk5", "alk5i", "alk5 inhibitor", "repsox"),
@@ -116,7 +115,12 @@ def _rule_normalize_event(event: dict[str, Any]) -> dict[str, Any] | None:
         if ontology_type == FactorType.REAGENT and factor_type != FactorType.REAGENT:
             continue
         if ontology_type in {FactorType.MATRIX_OR_COATING, FactorType.CULTURE_FORMAT}:
-            text = context_text if factor_type in {ontology_type, FactorType.OPERATION, FactorType.AGGREGATION, FactorType.MECHANICAL_CONDITION} else identity_text
+            text = (
+                context_text
+                if factor_type
+                in {ontology_type, FactorType.OPERATION, FactorType.AGGREGATION, FactorType.MECHANICAL_CONDITION}
+                else identity_text
+            )
         else:
             text = identity_text
         if any(alias in text for alias in spec["aliases"]):
@@ -252,7 +256,8 @@ def _factor_identity_text(event: dict[str, Any]) -> str:
 
 def _factor_context_text(event: dict[str, Any]) -> str:
     return " ".join(
-        str(event.get(key) or "") for key in ("standardized_name", "factor_name", "value_raw", "operation", "culture_format")
+        str(event.get(key) or "")
+        for key in ("standardized_name", "factor_name", "value_raw", "operation", "culture_format")
     ).lower()
 
 

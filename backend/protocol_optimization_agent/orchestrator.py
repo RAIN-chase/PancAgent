@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
-from protocol_optimization_agent.agents.integration_optimization import IntegrationOptimizationAgent
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
+from protocol_optimization_agent.agents.protocol_optimizing import ProtocolOptimizingAgent
 from protocol_optimization_agent.config import ProtocolOptimizationConfig
 from protocol_optimization_agent.io import ensure_dir, read_csv_dicts, read_jsonl, write_json
 from protocol_optimization_agent.llm_client import build_llm_client
@@ -27,7 +27,7 @@ class ProtocolOptimizationAgent:
         self.load_h5ad_manifest(state)
         self.analyze_protocol_factors(state)
         self.analyze_h5ad_profiles(state)
-        self.integrate_protocol_and_h5ad_results(state)
+        self.optimize_protocol_from_agent_outputs(state)
         self.generate_improved_protocol(state)
         self.qc_final_recommendations(state)
         self.export_results(state)
@@ -70,20 +70,24 @@ class ProtocolOptimizationAgent:
         state.h5ad_outputs = agent.run(state.h5ad_manifest)
         state.log_step("analyze_h5ad_profiles", "ok", outputs=_stringify_paths(state.h5ad_outputs))
 
-    def integrate_protocol_and_h5ad_results(self, state: PipelineState) -> None:
-        agent = IntegrationOptimizationAgent(
-            self.config.output_dir / "integration_optimization",
-            self.config.optimization_objective,
+    def optimize_protocol_from_agent_outputs(self, state: PipelineState) -> None:
+        agent = ProtocolOptimizingAgent(
+            self.config.output_dir / "protocol_optimization",
+            objective=self.config.optimization_objective,
         )
-        state.integration_outputs = agent.run(state.protocol_outputs, state.h5ad_outputs)
-        state.log_step("integrate_protocol_and_h5ad_results", "ok", outputs=_stringify_paths(state.integration_outputs))
+        protocol_dir = state.protocol_outputs["protocol_feature_matrix"].parent
+        h5ad_dir = state.h5ad_outputs["h5ad_summary_by_protocol"].parent
+        state.optimization_outputs = agent.run(protocol_dir, h5ad_dir)
+        state.log_step(
+            "optimize_protocol_from_agent_outputs", "ok", outputs=_stringify_paths(state.optimization_outputs)
+        )
 
     def generate_improved_protocol(self, state: PipelineState) -> None:
         state.log_step(
             "generate_improved_protocol",
             "ok",
-            markdown=str(state.integration_outputs["proposed_improved_protocol_md"]),
-            json=str(state.integration_outputs["proposed_improved_protocol_json"]),
+            markdown=str(state.optimization_outputs["proposed_improved_protocol_md"]),
+            json=str(state.optimization_outputs["proposed_improved_protocol_json"]),
         )
 
     def qc_final_recommendations(self, state: PipelineState) -> None:

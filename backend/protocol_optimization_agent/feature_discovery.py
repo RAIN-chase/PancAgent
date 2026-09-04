@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from protocol_optimization_agent.llm_client import LLMClient, OfflineLLMClient
 from protocol_optimization_agent.schemas import FeatureSpec, FeatureSpecSet
 
-
 DEFAULT_BASE_FEATURE_SPECS: list[dict[str, Any]] = []
 
 
@@ -25,8 +24,16 @@ def discover_and_compute_features(
     quality_filters: dict[str, Any],
     llm_client: LLMClient | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any]]:
-    base_specs, base_findings = _load_registry(Path(str(quality_filters.get("base_feature_registry_path") or "configs/base_feature_registry.json")), DEFAULT_BASE_FEATURE_SPECS, "base")
-    approved_specs, approved_findings = _load_registry(Path(str(quality_filters.get("approved_feature_registry_path") or "configs/approved_feature_registry.json")), [], "approved")
+    base_specs, base_findings = _load_registry(
+        Path(str(quality_filters.get("base_feature_registry_path") or "configs/base_feature_registry.json")),
+        DEFAULT_BASE_FEATURE_SPECS,
+        "base",
+    )
+    approved_specs, approved_findings = _load_registry(
+        Path(str(quality_filters.get("approved_feature_registry_path") or "configs/approved_feature_registry.json")),
+        [],
+        "approved",
+    )
     run_specs, run_findings = (
         _load_registry(Path(str(quality_filters.get("run_specific_feature_registry_path") or "")), [], "run_specific")
         if quality_filters.get("run_specific_feature_registry_path")
@@ -34,7 +41,9 @@ def discover_and_compute_features(
     )
     formal_registry_findings = [*base_findings, *approved_findings, *run_findings]
     if formal_registry_findings:
-        raise FeatureSpecExecutionError(f"Formal feature registry contains invalid specs: {formal_registry_findings[:3]}")
+        raise FeatureSpecExecutionError(
+            f"Formal feature registry contains invalid specs: {formal_registry_findings[:3]}"
+        )
     llm_specs, discovery_report = _discover_llm_feature_specs(
         protocol_records,
         analysis_events,
@@ -51,10 +60,21 @@ def discover_and_compute_features(
 
     approved_registry, approved_dedupe_findings = _dedupe_specs([*base_specs, *approved_specs, *run_specs], "approved")
     if approved_dedupe_findings:
-        raise FeatureSpecExecutionError(f"Formal feature registry contains duplicate specs: {approved_dedupe_findings[:3]}")
+        raise FeatureSpecExecutionError(
+            f"Formal feature registry contains duplicate specs: {approved_dedupe_findings[:3]}"
+        )
     candidate_registry, candidate_dedupe_findings = _dedupe_specs([*approved_registry, *llm_specs], "candidate")
-    final_rows, final_cell_provenance, final_compile_findings = _compute_registry_features(feature_rows, feature_provenance, analysis_events, protocol_records, approved_registry, require_executable=True)
-    candidate_rows, candidate_cell_provenance, candidate_compile_findings = _compute_registry_features(feature_rows, feature_provenance, analysis_events, protocol_records, candidate_registry, require_executable=False)
+    final_rows, final_cell_provenance, final_compile_findings = _compute_registry_features(
+        feature_rows, feature_provenance, analysis_events, protocol_records, approved_registry, require_executable=True
+    )
+    candidate_rows, candidate_cell_provenance, candidate_compile_findings = _compute_registry_features(
+        feature_rows,
+        feature_provenance,
+        analysis_events,
+        protocol_records,
+        candidate_registry,
+        require_executable=False,
+    )
     cell_provenance = {
         "schema_version": "feature-cell-provenance-v1",
         "final_matrix": final_cell_provenance,
@@ -73,15 +93,21 @@ def discover_and_compute_features(
     ]
     summary = dict(discovery_report.get("summary", {}))
     summary["n_findings"] = len(all_findings)
-    return final_rows, candidate_rows, cell_provenance, _registry_payload(approved_registry), {
-        **discovery_report,
-        "summary": summary,
-        "findings": all_findings,
-        "base_feature_registry": _registry_payload(base_specs),
-        "approved_feature_registry": _registry_payload(approved_registry),
-        "llm_proposed_feature_registry": _registry_payload(llm_specs),
-        "candidate_feature_registry": _registry_payload(candidate_registry),
-    }
+    return (
+        final_rows,
+        candidate_rows,
+        cell_provenance,
+        _registry_payload(approved_registry),
+        {
+            **discovery_report,
+            "summary": summary,
+            "findings": all_findings,
+            "base_feature_registry": _registry_payload(base_specs),
+            "approved_feature_registry": _registry_payload(approved_registry),
+            "llm_proposed_feature_registry": _registry_payload(llm_specs),
+            "candidate_feature_registry": _registry_payload(candidate_registry),
+        },
+    )
 
 
 def _discover_llm_feature_specs(
@@ -94,7 +120,11 @@ def _discover_llm_feature_specs(
     proposed: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
     if max_protocols <= 0:
-        return [], {"schema_version": "feature-discovery-audit-v1", "summary": {"llm_calls": 0, "n_llm_proposed_features": 0}, "findings": findings}
+        return [], {
+            "schema_version": "feature-discovery-audit-v1",
+            "summary": {"llm_calls": 0, "n_llm_proposed_features": 0},
+            "findings": findings,
+        }
     events_by_protocol: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in analysis_events:
         events_by_protocol[str(event.get("protocol_id") or "")].append(event)
@@ -175,7 +205,9 @@ def _compute_registry_features(
         for spec in specs:
             feature_name = str(spec["feature_name"])
             try:
-                value, refs = _compute_feature_value(spec, records_by_protocol.get(protocol_id, {}), events_by_protocol.get(protocol_id, []))
+                value, refs = _compute_feature_value(
+                    spec, records_by_protocol.get(protocol_id, {}), events_by_protocol.get(protocol_id, [])
+                )
             except FeatureSpecExecutionError as exc:
                 findings.append(
                     {
@@ -247,7 +279,9 @@ def _audit_llm_specs_against_source(
     return accepted, findings
 
 
-def _compute_feature_value(spec: dict[str, Any], record: dict[str, Any], events: list[dict[str, Any]]) -> tuple[Any, list[dict[str, Any]]]:
+def _compute_feature_value(
+    spec: dict[str, Any], record: dict[str, Any], events: list[dict[str, Any]]
+) -> tuple[Any, list[dict[str, Any]]]:
     refs = _matching_refs(spec, record, events)
     feature_type = str(spec.get("feature_type") or "binary")
     value_rule = str(spec.get("value_rule") or "").strip()
@@ -271,7 +305,9 @@ def _compute_feature_value(spec: dict[str, Any], record: dict[str, Any], events:
             return _ordered_sequence(value_rule, refs), refs
         return _category_set(value_rule, refs), refs
     if feature_type == "text_flag":
-        return "|".join(sorted({str(ref.get("matched_pattern") or "") for ref in refs if ref.get("matched_pattern")})), refs
+        return "|".join(
+            sorted({str(ref.get("matched_pattern") or "") for ref in refs if ref.get("matched_pattern")})
+        ), refs
     raise FeatureSpecExecutionError(f"Unsupported feature_type: {feature_type}")
 
 
@@ -317,10 +353,7 @@ def _event_text(event: dict[str, Any], source_fields: list[str] | None = None) -
         "value_raw",
         "evidence_quote",
     )
-    return " ".join(
-        str(event.get(key) or "")
-        for key in fields
-    ).lower()
+    return " ".join(str(event.get(key) or "") for key in fields).lower()
 
 
 def _stage_text(stage: dict[str, Any], source_fields: list[str] | None = None) -> str:
@@ -365,7 +398,9 @@ def _stage_ref(stage: dict[str, Any], matched_pattern: str) -> dict[str, Any]:
     }
 
 
-def _load_registry(path: Path, default: list[dict[str, Any]], registry_name: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _load_registry(
+    path: Path, default: list[dict[str, Any]], registry_name: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     raw = default
     findings: list[dict[str, Any]] = []
     if str(path) and path.exists():
@@ -431,13 +466,28 @@ def _validate_feature_rule(feature_type: str, value_rule: str) -> None:
         "binary": {"presence", "co_occurrence"},
         "count": {"count", "transition_count"},
         "numeric_max": {"max(concentration_value)", "max(day_start)", "max(day_end)", "max(duration_days)", "last_day"},
-        "numeric_min": {"min(concentration_value)", "min(day_start)", "min(day_end)", "min(duration_days)", "first_day"},
+        "numeric_min": {
+            "min(concentration_value)",
+            "min(day_start)",
+            "min(day_end)",
+            "min(duration_days)",
+            "first_day",
+        },
         "numeric_sum": {"sum_duration"},
-        "categorical": {"category_set(factor_type)", "category_set(action_type)", "category_set(normalized_family)", "category_set(concentration_unit)", "ordered_sequence(normalized_family)", "ordered_sequence(action_type)"},
+        "categorical": {
+            "category_set(factor_type)",
+            "category_set(action_type)",
+            "category_set(normalized_family)",
+            "category_set(concentration_unit)",
+            "ordered_sequence(normalized_family)",
+            "ordered_sequence(action_type)",
+        },
         "text_flag": {"category_set(matched_pattern)"},
     }
     if rule not in allowed.get(feature_type, set()):
-        raise FeatureSpecExecutionError(f"FeatureSpec value_rule '{rule}' is not executable for feature_type '{feature_type}'.")
+        raise FeatureSpecExecutionError(
+            f"FeatureSpec value_rule '{rule}' is not executable for feature_type '{feature_type}'."
+        )
 
 
 def _numeric_aggregate(value_rule: str, refs: list[dict[str, Any]], aggregate: Any) -> Any:
@@ -480,7 +530,7 @@ def _ordered_sequence(value_rule: str, refs: list[dict[str, Any]]) -> str:
         ),
     )
     values = [str(ref.get(field) or "") for ref in ordered if str(ref.get(field) or "")]
-    deduped = []
+    deduped: list[str] = []
     for value in values:
         if not deduped or deduped[-1] != value:
             deduped.append(value)
@@ -491,7 +541,7 @@ def _transition_count(refs: list[dict[str, Any]]) -> int:
     ordered = _ordered_matched_patterns(refs)
     if len(ordered) < 2:
         return 0
-    return sum(1 for left, right in zip(ordered, ordered[1:]) if left != right)
+    return sum(1 for left, right in zip(ordered, ordered[1:], strict=False) if left != right)
 
 
 def _has_co_occurrence(spec: dict[str, Any], refs: list[dict[str, Any]]) -> bool:

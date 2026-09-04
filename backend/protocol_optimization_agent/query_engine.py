@@ -33,10 +33,14 @@ class ProtocolQueryEngine:
         query_norm = _normalize_search_text(query)
         hits: list[dict[str, Any]] = []
         for row in self.matrix_rows:
-            haystack_raw = " ".join(str(row.get(key) or "") for key in ("protocol_id", "paper_id", "dataset_id", "protocol_name"))
+            haystack_raw = " ".join(
+                str(row.get(key) or "") for key in ("protocol_id", "paper_id", "dataset_id", "protocol_name")
+            )
             haystack_norm = _normalize_search_text(haystack_raw)
             haystack_tokens = set(_search_tokens(haystack_raw))
-            matched_tokens = sorted(token for token in query_tokens if token in haystack_tokens or token in haystack_norm)
+            matched_tokens = sorted(
+                token for token in query_tokens if token in haystack_tokens or token in haystack_norm
+            )
             score = _search_score(query_norm, query_tokens, haystack_norm, haystack_tokens)
             if not query_norm or score > 0:
                 hits.append(
@@ -62,7 +66,9 @@ class ProtocolQueryEngine:
             "metadata": {key: matrix.get(key, "") for key in _metadata_keys()},
             "strategy_summary": strategy,
             "n_audit_findings": len(audit),
-            "audit_issue_types": sorted({finding.get("issue_type", "") for finding in audit if finding.get("issue_type")}),
+            "audit_issue_types": sorted(
+                {finding.get("issue_type", "") for finding in audit if finding.get("issue_type")}
+            ),
         }
 
     def compare_protocols(self, protocol_id_a: str, protocol_id_b: str, max_features: int = 40) -> dict[str, Any]:
@@ -70,7 +76,9 @@ class ProtocolQueryEngine:
         left = matrix_by_protocol.get(protocol_id_a)
         right = matrix_by_protocol.get(protocol_id_b)
         if left is None or right is None:
-            missing = [protocol_id for protocol_id, row in ((protocol_id_a, left), (protocol_id_b, right)) if row is None]
+            missing = [
+                protocol_id for protocol_id, row in ((protocol_id_a, left), (protocol_id_b, right)) if row is None
+            ]
             return {"status": "not_found", "missing_protocol_ids": missing}
 
         feature_differences = _feature_differences(left, right, max_features=max_features)
@@ -162,18 +170,10 @@ class ProtocolQueryEngine:
         }
 
     def get_evidence_for_feature(self, protocol_id: str, feature: str) -> list[dict[str, Any]]:
-        return (
-            self.feature_provenance.get("protocols", {})
-            .get(protocol_id, {})
-            .get(feature, [])
-        )
+        return self.feature_provenance.get("protocols", {}).get(protocol_id, {}).get(feature, [])
 
     def get_protocol_events(self, protocol_id: str, limit: int | None = None) -> list[dict[str, Any]]:
-        events = [
-            event
-            for event in self.normalized_events
-            if str(event.get("protocol_id") or "") == protocol_id
-        ]
+        events = [event for event in self.normalized_events if str(event.get("protocol_id") or "") == protocol_id]
         return events[:limit] if limit else events
 
     def query_matrix(
@@ -240,7 +240,11 @@ class ProtocolQueryEngine:
             matrix = [[row[idx] for idx in feature_order] for row in matrix]
             rendered_values = [[row[idx] for idx in feature_order] for row in rendered_values]
 
-        output_path = self.output_dir / "visualizations" / (filename or _default_heatmap_filename(protocol_labels, numeric_features))
+        output_path = (
+            self.output_dir
+            / "visualizations"
+            / (filename or _default_heatmap_filename(protocol_labels, numeric_features))
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
             _render_heatmap_svg(
@@ -328,7 +332,9 @@ class ProtocolQueryEngine:
             "source_matrix": str(self.output_dir / "protocol_feature_matrix.csv"),
         }
 
-    def propose_feature_specs_context(self, protocol_ids: list[str] | None = None, limit_events: int = 200) -> dict[str, Any]:
+    def propose_feature_specs_context(
+        self, protocol_ids: list[str] | None = None, limit_events: int = 200
+    ) -> dict[str, Any]:
         selected = set(protocol_ids or [])
         protocols = [
             self.get_protocol_summary(str(row.get("protocol_id") or ""))
@@ -336,9 +342,7 @@ class ProtocolQueryEngine:
             if not selected or str(row.get("protocol_id") or "") in selected
         ]
         events = [
-            event
-            for event in self.normalized_events
-            if not selected or str(event.get("protocol_id") or "") in selected
+            event for event in self.normalized_events if not selected or str(event.get("protocol_id") or "") in selected
         ]
         return {
             "instruction": "Use this context to propose FeatureSpec candidates only. Do not compute matrix values.",
@@ -422,10 +426,7 @@ class ProtocolQueryEngine:
         return {str(row.get("protocol_id") or ""): row for row in self.matrix_rows}
 
     def _strategy_by_protocol(self) -> dict[str, dict[str, Any]]:
-        return {
-            str(row.get("protocol_id") or ""): row
-            for row in self.strategy_summary.get("protocols", [])
-        }
+        return {str(row.get("protocol_id") or ""): row for row in self.strategy_summary.get("protocols", [])}
 
     def _find_pair_relationship(self, protocol_id_a: str, protocol_id_b: str) -> dict[str, Any]:
         wanted = {protocol_id_a, protocol_id_b}
@@ -478,11 +479,19 @@ def _group_feature_differences(differences: list[dict[str, Any]]) -> dict[str, l
 def _feature_importance_group(feature: str) -> str:
     if feature.startswith("semantic_module_") or feature == "n_strategy_modules":
         return "strategy_module"
-    if feature in {"has_2d_adherent_culture", "has_suspension_culture", "has_shaking", "has_aggregation"} or "culture" in feature:
+    if (
+        feature in {"has_2d_adherent_culture", "has_suspension_culture", "has_shaking", "has_aggregation"}
+        or "culture" in feature
+    ):
         return "culture_system"
     if feature.startswith("norm_family_") or feature.endswith("_presence"):
         return "core_signaling_family"
-    if feature.startswith("num_") or feature.startswith("requires_") or feature.startswith("transition_") or feature in {"ordered_reagent_program", "number_of_stages", "stage_transition_number"}:
+    if (
+        feature.startswith("num_")
+        or feature.startswith("requires_")
+        or feature.startswith("transition_")
+        or feature in {"ordered_reagent_program", "number_of_stages", "stage_transition_number"}
+    ):
         return "workflow"
     if any(token in feature for token in ("day", "duration", "exposure")):
         return "timing_or_exposure"
@@ -574,7 +583,12 @@ def _split_comparison_question(question: str) -> list[str]:
 
 
 def _clean_query_part(value: str) -> str:
-    value = re.sub(r"(protocols?|有什么区别|有何区别|区别|compare|difference|differences|between|what|are|the|和|与)", " ", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"(protocols?|有什么区别|有何区别|区别|compare|difference|differences|between|what|are|the|和|与)",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
     return " ".join(value.replace("？", " ").replace("?", " ").split())
 
 
@@ -588,7 +602,14 @@ def _deterministic_comparison_answer(comparison: dict[str, Any]) -> str:
         f"Protocol A: {a.get('protocol_name') or comparison.get('protocol_a', {}).get('protocol_id')}",
         f"Protocol B: {b.get('protocol_name') or comparison.get('protocol_b', {}).get('protocol_id')}",
     ]
-    for group in ("strategy_module", "culture_system", "core_signaling_family", "workflow", "timing_or_exposure", "concentration"):
+    for group in (
+        "strategy_module",
+        "culture_system",
+        "core_signaling_family",
+        "workflow",
+        "timing_or_exposure",
+        "concentration",
+    ):
         items = grouped.get(group, [])
         if items:
             features = ", ".join(item["feature"] for item in items[:5])
@@ -652,6 +673,7 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
 
 def _select_matrix_rows(rows: list[dict[str, str]], protocol_ids: list[str]) -> list[dict[str, str]]:
     wanted = {str(protocol_id) for protocol_id in protocol_ids if str(protocol_id)}
@@ -721,7 +743,8 @@ def _feature_layer(feature: str) -> str:
     if feature.startswith(("num_", "has_", "requires_")):
         return "workflow"
     if (
-        feature in {"total_days", "number_of_stages", "stage_transition_number", "max_stage_duration", "mean_stage_duration"}
+        feature
+        in {"total_days", "number_of_stages", "stage_transition_number", "max_stage_duration", "mean_stage_duration"}
         or feature.endswith("_start_day")
         or feature.endswith("_end_day")
         or feature.endswith("_total_exposure")
@@ -786,7 +809,7 @@ def _normalize_matrix_by_column(matrix: list[list[float]], normalize: str) -> li
 def _transpose(matrix: list[list[float]]) -> list[list[float]]:
     if not matrix:
         return []
-    return [list(column) for column in zip(*matrix)]
+    return [list(column) for column in zip(*matrix, strict=False)]
 
 
 def _cluster_order(vectors: list[list[float]]) -> list[int]:
@@ -863,7 +886,9 @@ def _render_heatmap_svg(
     ]
     for col_idx, feature in enumerate(feature_labels):
         x = left + col_idx * cell + cell * 0.65
-        parts.append(f'<text class="axis" transform="translate({x},{top - 8}) rotate(-55)" text-anchor="start">{html.escape(feature)}</text>')
+        parts.append(
+            f'<text class="axis" transform="translate({x},{top - 8}) rotate(-55)" text-anchor="start">{html.escape(feature)}</text>'
+        )
     for row_idx, protocol_id in enumerate(protocol_labels):
         y = top + row_idx * cell + cell * 0.68
         parts.append(f'<text class="axis" x="{left - 8}" y="{y}" text-anchor="end">{html.escape(protocol_id)}</text>')
@@ -874,19 +899,23 @@ def _render_heatmap_svg(
             y = top + row_idx * cell
             parts.append(
                 f'<rect x="{x}" y="{y}" width="{cell - 1}" height="{cell - 1}" fill="{_heatmap_color(value)}">'
-                f'<title>{html.escape(protocol_labels[row_idx])} | {html.escape(feature_labels[col_idx])}: {raw:g}</title>'
+                f"<title>{html.escape(protocol_labels[row_idx])} | {html.escape(feature_labels[col_idx])}: {raw:g}</title>"
                 "</rect>"
             )
     legend_x = 20
     legend_y = height - 54
     for idx in range(80):
         value = idx / 79
-        parts.append(f'<rect x="{legend_x + idx * 2}" y="{legend_y}" width="2" height="12" fill="{_heatmap_color(value)}"/>')
-    parts.extend([
-        f'<text class="small" x="{legend_x}" y="{legend_y + 28}">low</text>',
-        f'<text class="small" x="{legend_x + 132}" y="{legend_y + 28}">high</text>',
-        "</svg>",
-    ])
+        parts.append(
+            f'<rect x="{legend_x + idx * 2}" y="{legend_y}" width="2" height="12" fill="{_heatmap_color(value)}"/>'
+        )
+    parts.extend(
+        [
+            f'<text class="small" x="{legend_x}" y="{legend_y + 28}">low</text>',
+            f'<text class="small" x="{legend_x + 132}" y="{legend_y + 28}">high</text>',
+            "</svg>",
+        ]
+    )
     return "\n".join(parts)
 
 
@@ -900,7 +929,7 @@ def _render_layered_heatmap_index(title: str, layer_results: list[dict[str, Any]
                 [
                     '<section class="layer">',
                     f"<h2>{label}</h2>",
-                    f'<p>{int(result.get("n_features", 0))} features, {int(result.get("n_protocols", 0))} protocols</p>',
+                    f"<p>{int(result.get('n_features', 0))} features, {int(result.get('n_protocols', 0))} protocols</p>",
                     f'<object data="{html.escape(path.name)}" type="image/svg+xml"></object>',
                     "</section>",
                 ]

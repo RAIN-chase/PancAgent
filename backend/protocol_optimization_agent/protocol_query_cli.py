@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from protocol_optimization_agent.query_engine import ProtocolQueryEngine
 
@@ -12,10 +13,16 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Query Protocol Analysis Agent outputs.")
-    parser.add_argument("--output-dir", default="runs/protocol_analysis_agent_run", help="Directory containing protocol analysis outputs.")
+    parser.add_argument(
+        "--output-dir",
+        default="runs/protocol_analysis_agent_run",
+        help="Directory containing protocol analysis outputs.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    find_parser = subparsers.add_parser("find", help="Find protocols by protocol id, paper id, dataset id, or protocol name.")
+    find_parser = subparsers.add_parser(
+        "find", help="Find protocols by protocol id, paper id, dataset id, or protocol name."
+    )
     find_parser.add_argument("query")
 
     summary_parser = subparsers.add_parser("summary", help="Show a structured protocol summary.")
@@ -30,12 +37,15 @@ def main() -> None:
     evidence_parser.add_argument("protocol_id")
     evidence_parser.add_argument("feature")
 
-    chat_parser = subparsers.add_parser("chat", help="Answer a natural-language protocol query using local structured outputs.")
+    chat_parser = subparsers.add_parser(
+        "chat", help="Answer a natural-language protocol query using local structured outputs."
+    )
     chat_parser.add_argument("question")
     chat_parser.add_argument("--max-features", type=int, default=30)
 
     args = parser.parse_args()
     engine = ProtocolQueryEngine(Path(args.output_dir))
+    payload: Any
 
     if args.command == "find":
         payload = engine.find_protocols(args.query)

@@ -52,6 +52,7 @@ H5AD_ANALYSIS_SUBGRAPH = SubgraphSpec(
         "maturity_scoring": "Lineage maturity scoring",
         "reference_similarity_analysis": "Organoid-reference similarity analysis",
         "regulatory_and_trajectory_placeholders": "Regulatory and trajectory analysis placeholders",
+        "external_tool_inventory": "Downloaded external tool inventory",
         "aggregate_quantitative_comparison": "Dataset quantitative comparison aggregation",
         "data_analysis_audit": "Data analysis limitations audit",
     },
@@ -63,33 +64,36 @@ H5AD_ANALYSIS_SUBGRAPH = SubgraphSpec(
         ("marker_and_gene_program_scoring", "maturity_scoring", "user gene programs"),
         ("maturity_scoring", "reference_similarity_analysis", "matched lineages and cell types"),
         ("reference_similarity_analysis", "regulatory_and_trajectory_placeholders", "optional external tools"),
-        ("regulatory_and_trajectory_placeholders", "aggregate_quantitative_comparison", None),
+        ("regulatory_and_trajectory_placeholders", "external_tool_inventory", None),
+        ("external_tool_inventory", "aggregate_quantitative_comparison", None),
         ("aggregate_quantitative_comparison", "data_analysis_audit", None),
     ),
 )
 
 
-INTEGRATION_OPTIMIZATION_SUBGRAPH = SubgraphSpec(
-    graph_id="integration_optimization_agent",
-    title="Integration and Protocol Optimization Agent",
+PROTOCOL_OPTIMIZING_SUBGRAPH = SubgraphSpec(
+    graph_id="protocol_optimizing_agent",
+    title="Protocol Optimizing Agent",
     nodes={
-        "load_agent_outputs": "Load agent outputs",
-        "align_protocol_h5ad_units": "Align protocol and h5ad units",
-        "phenotype_factor_join": "Join phenotype with factors",
-        "association_analysis": "Association analysis",
-        "recommendation_classifier": "Evidence class assignment",
-        "proposed_protocol_builder": "Proposed protocol builder",
-        "evidence_risk_qc": "Evidence and risk QC",
-        "export_recommendations": "Export recommendations",
+        "integration_input_gate": "Load and validate Protocol/Data Agent outputs",
+        "phenotype_target_builder": "Build multi-endpoint maturity targets",
+        "protocol_phenotype_joiner": "Join protocol features with phenotype summaries",
+        "protocol_phenotype_association_analyzer": "Small-sample association screen",
+        "mechanistic_evidence_ranker": "Mechanism and provenance ranking",
+        "counterfactual_protocol_scorer": "Nearest-neighbor new protocol scorer",
+        "optimized_protocol_generator": "Hypothesis-only protocol proposal builder",
+        "optimization_audit": "Evidence, uncertainty, and risk audit",
+        "export_results": "Export optimization contracts",
     },
     edges=(
-        ("load_agent_outputs", "align_protocol_h5ad_units", None),
-        ("align_protocol_h5ad_units", "phenotype_factor_join", None),
-        ("phenotype_factor_join", "association_analysis", None),
-        ("association_analysis", "recommendation_classifier", "correlation, not causality"),
-        ("recommendation_classifier", "proposed_protocol_builder", None),
-        ("proposed_protocol_builder", "evidence_risk_qc", None),
-        ("evidence_risk_qc", "export_recommendations", None),
+        ("integration_input_gate", "phenotype_target_builder", None),
+        ("phenotype_target_builder", "protocol_phenotype_joiner", None),
+        ("protocol_phenotype_joiner", "protocol_phenotype_association_analyzer", None),
+        ("protocol_phenotype_association_analyzer", "mechanistic_evidence_ranker", "association, not causality"),
+        ("mechanistic_evidence_ranker", "counterfactual_protocol_scorer", None),
+        ("counterfactual_protocol_scorer", "optimized_protocol_generator", "relative prediction only"),
+        ("optimized_protocol_generator", "optimization_audit", None),
+        ("optimization_audit", "export_results", None),
     ),
 )
 
@@ -97,7 +101,7 @@ INTEGRATION_OPTIMIZATION_SUBGRAPH = SubgraphSpec(
 CORE_AGENT_SUBGRAPHS = (
     PROTOCOL_ANALYSIS_SUBGRAPH,
     H5AD_ANALYSIS_SUBGRAPH,
-    INTEGRATION_OPTIMIZATION_SUBGRAPH,
+    PROTOCOL_OPTIMIZING_SUBGRAPH,
 )
 
 
@@ -115,10 +119,10 @@ def render_core_agent_subgraphs_mermaid() -> str:
         lines.append("  end")
     lines.extend(
         [
-            "  protocol_difference_report --> load_agent_outputs",
-            "  quality_and_evidence_auditor --> load_agent_outputs",
-            "  aggregate_quantitative_comparison --> load_agent_outputs",
-            "  data_analysis_audit --> load_agent_outputs",
+            "  protocol_difference_report --> integration_input_gate",
+            "  quality_and_evidence_auditor --> integration_input_gate",
+            "  aggregate_quantitative_comparison --> integration_input_gate",
+            "  data_analysis_audit --> integration_input_gate",
         ]
     )
     return "\n".join(lines)

@@ -18,7 +18,7 @@ class PipelineState:
     h5ad_manifest: list[dict[str, Any]] = field(default_factory=list)
     protocol_outputs: dict[str, Path] = field(default_factory=dict)
     h5ad_outputs: dict[str, Path] = field(default_factory=dict)
-    integration_outputs: dict[str, Path] = field(default_factory=dict)
+    optimization_outputs: dict[str, Path] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     step_log: list[dict[str, Any]] = field(default_factory=list)
 

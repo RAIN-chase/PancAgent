@@ -12,15 +12,24 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import InjectedState, ToolNode
 
+from protocol_optimization_agent.agents.protocol_optimizing import ProtocolOptimizingAgent
 from protocol_optimization_agent.io import read_csv_dicts, read_json, read_jsonl
 from protocol_optimization_agent.langgraph_server import _build_chat_model_from_env
+from protocol_optimization_agent.optimization_orchestration import build_optimization_orchestration_plan
 from protocol_optimization_agent.query_engine import ProtocolQueryEngine
+from protocol_optimization_agent.runtime import (
+    RunContext,
+    append_tool_call_log,
+    evidence_response_envelope,
+    resolve_agent_output_dir,
+    write_run_manifest,
+)
+from protocol_optimization_agent.tools.external_data_tools import build_external_tool_inventory
 from protocol_optimization_agent.tools.h5ad_tools import DATA_ANALYSIS_TOOL_REGISTRY
-
 
 DEFAULT_PROTOCOL_OUTPUT_DIR = "runs/protocol_analysis_agent_simplified_autofeatures"
 DEFAULT_DATA_ANALYSIS_OUTPUT_DIR = "runs/data_analysis"
-DEFAULT_OPTIMIZATION_OUTPUT_DIR = "runs/integration_optimization"
+DEFAULT_OPTIMIZATION_OUTPUT_DIR = "runs/protocol_optimization"
 
 SYSTEM_PROMPT = """You are the Orchestrator Agent for ProtocolOptimizationAgent.
 
@@ -42,6 +51,13 @@ Runtime context:
 - data_analysis_output_dir: {data_analysis_output_dir}
 - optimization_output_dir: {optimization_output_dir}
 - max_features: {max_features}
+
+Mandatory response schema:
+- used_tools: names of SubAgent tools and deterministic tools used.
+- used_features: protocol matrix features or data metrics used for the answer.
+- evidence_refs: protocol/data evidence references returned by tools.
+- confidence_caveats: limitations that affect interpretation.
+- trace_id: runtime trace id linking answer, tool-call log, and run manifest.
 """
 
 
@@ -50,6 +66,10 @@ class OrchestratorState(TypedDict, total=False):
     protocol_output_dir: str
     data_analysis_output_dir: str
     optimization_output_dir: str
+    user_id: str
+    run_id: str
+    trace_id: str
+    workspace_root: str
     max_features: int
 
 
@@ -77,7 +97,7 @@ SUBAGENT_REGISTRY: dict[str, dict[str, Any]] = {
     },
     "protocol_optimizing_agent": {
         "title": "Protocol Optimizing Agent",
-        "status": "scaffolded_via_integration_optimization_agent",
+        "status": "framework_implemented",
         "responsibilities": [
             "join protocol features with h5ad phenotype summaries",
             "classify recommendation evidence strength",
@@ -89,15 +109,36 @@ SUBAGENT_REGISTRY: dict[str, dict[str, Any]] = {
 
 
 def _protocol_output_dir(value: str | None = None) -> str:
-    return value or os.getenv("PROTOCOL_ANALYSIS_OUTPUT_DIR") or DEFAULT_PROTOCOL_OUTPUT_DIR
+    context = RunContext.from_values()
+    return resolve_agent_output_dir(
+        "protocol_analysis",
+        value,
+        "PROTOCOL_ANALYSIS_OUTPUT_DIR",
+        DEFAULT_PROTOCOL_OUTPUT_DIR,
+        context,
+    )
 
 
 def _data_analysis_output_dir(value: str | None = None) -> str:
-    return value or os.getenv("DATA_ANALYSIS_OUTPUT_DIR") or DEFAULT_DATA_ANALYSIS_OUTPUT_DIR
+    context = RunContext.from_values()
+    return resolve_agent_output_dir(
+        "data_analysis",
+        value,
+        "DATA_ANALYSIS_OUTPUT_DIR",
+        DEFAULT_DATA_ANALYSIS_OUTPUT_DIR,
+        context,
+    )
 
 
 def _optimization_output_dir(value: str | None = None) -> str:
-    return value or os.getenv("PROTOCOL_OPTIMIZATION_OUTPUT_DIR") or DEFAULT_OPTIMIZATION_OUTPUT_DIR
+    context = RunContext.from_values()
+    return resolve_agent_output_dir(
+        "protocol_optimization",
+        value,
+        "PROTOCOL_OPTIMIZATION_OUTPUT_DIR",
+        DEFAULT_OPTIMIZATION_OUTPUT_DIR,
+        context,
+    )
 
 
 @tool
@@ -115,45 +156,125 @@ def protocol_analysis_agent(
     question: str,
     protocol_output_dir: Annotated[str, InjectedState("protocol_output_dir")],
     max_features: Annotated[int, InjectedState("max_features")],
+    user_id: Annotated[str, InjectedState("user_id")] = "",
+    run_id: Annotated[str, InjectedState("run_id")] = "",
+    trace_id: Annotated[str, InjectedState("trace_id")] = "",
+    workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
 ) -> dict[str, Any]:
     """Delegate protocol lookup, comparison, matrix, event, evidence, or visualization questions to Protocol Analysis Agent."""
 
-    engine = ProtocolQueryEngine(Path(_protocol_output_dir(protocol_output_dir)))
+    context = RunContext.from_values(user_id=user_id, run_id=run_id, trace_id=trace_id, workspace_root=workspace_root)
+    output_dir = _protocol_output_dir(protocol_output_dir)
+    engine = ProtocolQueryEngine(Path(output_dir))
     result = engine.answer_question(question, max_features=max_features)
-    return {
-        "subagent": "protocol_analysis_agent",
-        "status": result.get("status", "ok"),
-        "question": question,
-        "result": result,
-        "output_dir": _protocol_output_dir(protocol_output_dir),
+    selected_operation = str(result.get("intent") or "protocol_query")
+    output_files = {
+        "protocol_feature_matrix": str(Path(output_dir) / "protocol_feature_matrix.csv"),
+        "normalized_events": str(Path(output_dir) / "normalized_factor_events.jsonl"),
+        "feature_provenance": str(Path(output_dir) / "protocol_feature_provenance.json"),
     }
+    append_tool_call_log(
+        context,
+        subagent="protocol_analysis_agent",
+        operation=selected_operation,
+        status=str(result.get("status", "ok")),
+        question=question,
+        output_files=output_files,
+    )
+    write_run_manifest(
+        context,
+        output_dirs={"protocol_analysis": output_dir},
+        inputs={"protocol_analysis_output_dir": output_dir},
+        extra={"entrypoint": "orchestrator", "last_subagent": "protocol_analysis_agent"},
+    )
+    return evidence_response_envelope(
+        context=context,
+        subagent="protocol_analysis_agent",
+        status=str(result.get("status", "ok")),
+        question=question,
+        selected_operation=selected_operation,
+        used_tools=_protocol_used_tools(result),
+        used_features=_protocol_used_features(result),
+        evidence_refs=_protocol_evidence_refs(result),
+        confidence_caveats=_protocol_confidence_caveats(result),
+        result_preview=result,
+        output_files=output_files,
+        provenance={"output_dir": output_dir},
+        extra={"result": result, "output_dir": output_dir},
+    )
 
 
 @tool
 def data_analysis_agent(
     question: str,
     data_analysis_output_dir: Annotated[str, InjectedState("data_analysis_output_dir")],
+    user_id: Annotated[str, InjectedState("user_id")] = "",
+    run_id: Annotated[str, InjectedState("run_id")] = "",
+    trace_id: Annotated[str, InjectedState("trace_id")] = "",
+    workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
 ) -> dict[str, Any]:
     """Delegate h5ad, marker, composition, maturity, reference similarity, trajectory, or QC questions to Data Analysis Agent."""
 
+    context = RunContext.from_values(user_id=user_id, run_id=run_id, trace_id=trace_id, workspace_root=workspace_root)
     output_dir = Path(_data_analysis_output_dir(data_analysis_output_dir))
+    selected_operation = _select_data_analysis_operation(question)
     comparison_report = read_json(output_dir / "data_analysis_comparison_report.json")
     limitations = read_json(output_dir / "h5ad_analysis_limitations.json")
+    tool_registry = read_json(output_dir / "data_analysis_tool_registry.json")
     summaries = read_jsonl(output_dir / "h5ad_summary_by_protocol.jsonl")
     protocol_summary_rows = read_csv_dicts(output_dir / "data_analysis_protocol_summary.csv")
-    existing_outputs = sorted(path.name for path in output_dir.glob("*") if path.is_file()) if output_dir.exists() else []
-    return {
-        "subagent": "data_analysis_agent",
-        "status": "ok" if existing_outputs else "no_prior_data_analysis_outputs",
-        "question": question,
-        "output_dir": str(output_dir),
-        "summary": comparison_report.get("summary", {}),
-        "protocol_summaries": protocol_summary_rows[:50],
-        "dataset_summaries": summaries[:50],
-        "limitations": limitations.get("limitations", [])[:50],
-        "tool_registry": DATA_ANALYSIS_TOOL_REGISTRY,
-        "available_output_files": existing_outputs,
+    existing_outputs = (
+        sorted(path.name for path in output_dir.glob("*") if path.is_file()) if output_dir.exists() else []
+    )
+    selected_output = _data_operation_output_file(selected_operation)
+    result_preview = read_csv_dicts(output_dir / selected_output)[:50]
+    status = "ok" if existing_outputs else "no_prior_data_analysis_outputs"
+    output_files = {
+        "selected": str(output_dir / selected_output),
+        "summary": str(output_dir / "data_analysis_comparison_report.json"),
+        "limitations": str(output_dir / "h5ad_analysis_limitations.json"),
     }
+    append_tool_call_log(
+        context,
+        subagent="data_analysis_agent",
+        operation=selected_operation,
+        status=status,
+        question=question,
+        output_files=output_files,
+    )
+    write_run_manifest(
+        context,
+        output_dirs={"data_analysis": str(output_dir)},
+        inputs={"data_analysis_output_dir": str(output_dir)},
+        extra={"entrypoint": "orchestrator", "last_subagent": "data_analysis_agent"},
+    )
+    return evidence_response_envelope(
+        context=context,
+        subagent="data_analysis_agent",
+        status=status,
+        question=question,
+        selected_operation=selected_operation,
+        used_tools=[_data_operation_tool_name(selected_operation)],
+        used_features=_data_used_features(selected_operation, result_preview),
+        evidence_refs=_data_evidence_refs(summaries[:50]),
+        confidence_caveats=_data_confidence_caveats(status, limitations.get("limitations", [])),
+        limitations=limitations.get("limitations", [])[:50],
+        provenance=_data_analysis_provenance(summaries[:50]),
+        result_preview=result_preview,
+        output_files=output_files,
+        extra={
+            "output_dir": str(output_dir),
+            "summary": comparison_report.get("summary", {}),
+            "protocol_summaries": protocol_summary_rows[:50],
+            "dataset_summaries": summaries[:50],
+            "tool_registry": tool_registry.get("tools", DATA_ANALYSIS_TOOL_REGISTRY),
+            "external_tool_inventory": tool_registry.get(
+                "external_tool_inventory", build_external_tool_inventory(Path.cwd())
+            ),
+            "callable_tools": tool_registry.get("callable_tools", []),
+            "available_output_files": existing_outputs,
+        },
+    )
 
 
 @tool
@@ -162,31 +283,113 @@ def protocol_optimizing_agent(
     protocol_output_dir: Annotated[str, InjectedState("protocol_output_dir")],
     data_analysis_output_dir: Annotated[str, InjectedState("data_analysis_output_dir")],
     optimization_output_dir: Annotated[str, InjectedState("optimization_output_dir")],
+    objective: dict[str, Any] | None = None,
+    new_protocol_features: dict[str, Any] | None = None,
+    force_protocol_rerun: bool = False,
+    force_data_rerun: bool = False,
+    force_optimization_rerun: bool = False,
+    user_id: Annotated[str, InjectedState("user_id")] = "",
+    run_id: Annotated[str, InjectedState("run_id")] = "",
+    trace_id: Annotated[str, InjectedState("trace_id")] = "",
+    workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
 ) -> dict[str, Any]:
     """Delegate integrated protocol-improvement, ranking, recommendation, or optimization questions to Protocol Optimizing Agent."""
 
+    context = RunContext.from_values(user_id=user_id, run_id=run_id, trace_id=trace_id, workspace_root=workspace_root)
     protocol_dir = Path(_protocol_output_dir(protocol_output_dir))
     data_dir = Path(_data_analysis_output_dir(data_analysis_output_dir))
     optimization_dir = Path(_optimization_output_dir(optimization_output_dir))
+    orchestration_plan = build_optimization_orchestration_plan(
+        protocol_dir,
+        data_dir,
+        force_protocol_rerun=force_protocol_rerun,
+        force_data_rerun=force_data_rerun,
+        force_optimization_rerun=force_optimization_rerun,
+    )
+    has_cached_optimization = (optimization_dir / "proposed_improved_protocol.json").exists()
+    should_run = orchestration_plan["can_run_protocol_optimizing_agent"] and (
+        new_protocol_features or force_optimization_rerun or not has_cached_optimization
+    )
+    if should_run:
+        ProtocolOptimizingAgent(output_dir=optimization_dir, objective=objective).run(
+            protocol_dir,
+            data_dir,
+            objective=objective,
+            new_protocol_features=new_protocol_features,
+        )
     recommendation_json = _read_optional_json(optimization_dir / "proposed_improved_protocol.json")
     recommendation_md = _read_optional_text(optimization_dir / "proposed_improved_protocol.md")
     risk_report = _read_optional_json(optimization_dir / "evidence_and_risk_report.json")
-    return {
-        "subagent": "protocol_optimizing_agent",
-        "status": "ok" if recommendation_json or recommendation_md else "no_prior_optimization_outputs",
-        "question": question,
-        "inputs": {
+    candidates = read_csv_dicts(optimization_dir / "optimization_candidate_features.csv")
+    prediction = _read_optional_json(optimization_dir / "counterfactual_protocol_predictions.json")
+    status = _optimization_tool_status(
+        bool(orchestration_plan["can_run_protocol_optimizing_agent"]),
+        bool(recommendation_json or recommendation_md),
+        bool(should_run),
+    )
+    output_files = {
+        "proposed_protocol_json": str(optimization_dir / "proposed_improved_protocol.json"),
+        "proposed_protocol_md": str(optimization_dir / "proposed_improved_protocol.md"),
+        "evidence_and_risk_report": str(optimization_dir / "evidence_and_risk_report.json"),
+        "candidate_features": str(optimization_dir / "optimization_candidate_features.csv"),
+    }
+    append_tool_call_log(
+        context,
+        subagent="protocol_optimizing_agent",
+        operation="protocol_optimization",
+        status=status,
+        question=question,
+        output_files=output_files,
+    )
+    write_run_manifest(
+        context,
+        output_dirs={
+            "protocol_analysis": str(protocol_dir),
+            "data_analysis": str(data_dir),
+            "protocol_optimization": str(optimization_dir),
+        },
+        inputs={
+            "protocol_analysis_output_dir": str(protocol_dir),
+            "data_analysis_output_dir": str(data_dir),
+        },
+        extra={"entrypoint": "orchestrator", "last_subagent": "protocol_optimizing_agent"},
+    )
+    inputs = {
             "protocol_output_dir": str(protocol_dir),
             "data_analysis_output_dir": str(data_dir),
             "optimization_output_dir": str(optimization_dir),
             "protocol_matrix_exists": (protocol_dir / "protocol_feature_matrix.csv").exists(),
             "data_summary_exists": (data_dir / "data_analysis_protocol_summary.csv").exists(),
-        },
-        "recommendation_policy": "optimization hypotheses only; experimental validation required",
-        "proposed_improved_protocol": recommendation_json,
-        "proposed_improved_protocol_markdown": recommendation_md,
-        "evidence_and_risk_report": risk_report,
     }
+    return evidence_response_envelope(
+        context=context,
+        subagent="protocol_optimizing_agent",
+        status=status,
+        question=question,
+        selected_operation="protocol_optimization",
+        used_tools=["build_optimization_orchestration_plan", "ProtocolOptimizingAgent.run"],
+        used_features=[str(row.get("feature") or "") for row in candidates[:20] if row.get("feature")],
+        evidence_refs=_optimization_evidence_refs(candidates[:20], risk_report),
+        confidence_caveats=_optimization_confidence_caveats(status, candidates[:20], risk_report),
+        limitations=["Optimization recommendations are hypotheses and require experimental validation."],
+        provenance={"inputs": inputs, "orchestration_plan": orchestration_plan},
+        result_preview={
+            "proposed_improved_protocol": recommendation_json,
+            "top_candidate_features": candidates[:20],
+            "counterfactual_prediction": prediction,
+        },
+        output_files=output_files,
+        extra={
+            "orchestration_plan": orchestration_plan,
+            "inputs": inputs,
+            "recommendation_policy": "optimization hypotheses only; experimental validation required",
+            "proposed_improved_protocol": recommendation_json,
+            "proposed_improved_protocol_markdown": recommendation_md,
+            "evidence_and_risk_report": risk_report,
+            "top_candidate_features": candidates[:20],
+            "counterfactual_prediction": prediction,
+        },
+    )
 
 
 ORCHESTRATOR_TOOLS = [
@@ -195,6 +398,16 @@ ORCHESTRATOR_TOOLS = [
     data_analysis_agent,
     protocol_optimizing_agent,
 ]
+
+
+def _optimization_tool_status(can_run: bool, has_outputs: bool, ran_now: bool) -> str:
+    if not can_run:
+        return "upstream_rerun_required"
+    if ran_now:
+        return "optimization_ran"
+    if has_outputs:
+        return "ok_cached_optimization_outputs"
+    return "no_prior_optimization_outputs"
 
 
 def build_orchestrator_graph(chat_model: Runnable | None = None, compile_graph: bool = True) -> Any:
@@ -212,11 +425,51 @@ def build_orchestrator_graph(chat_model: Runnable | None = None, compile_graph: 
 
 
 def _configure_node(state: OrchestratorState) -> OrchestratorState:
+    context = RunContext.from_values(
+        user_id=state.get("user_id"),
+        run_id=state.get("run_id"),
+        trace_id=state.get("trace_id"),
+        workspace_root=state.get("workspace_root"),
+    )
+    protocol_output_dir = resolve_agent_output_dir(
+        "protocol_analysis",
+        state.get("protocol_output_dir"),
+        "PROTOCOL_ANALYSIS_OUTPUT_DIR",
+        DEFAULT_PROTOCOL_OUTPUT_DIR,
+        context,
+    )
+    data_analysis_output_dir = resolve_agent_output_dir(
+        "data_analysis",
+        state.get("data_analysis_output_dir"),
+        "DATA_ANALYSIS_OUTPUT_DIR",
+        DEFAULT_DATA_ANALYSIS_OUTPUT_DIR,
+        context,
+    )
+    optimization_output_dir = resolve_agent_output_dir(
+        "protocol_optimization",
+        state.get("optimization_output_dir"),
+        "PROTOCOL_OPTIMIZATION_OUTPUT_DIR",
+        DEFAULT_OPTIMIZATION_OUTPUT_DIR,
+        context,
+    )
+    write_run_manifest(
+        context,
+        output_dirs={
+            "protocol_analysis": protocol_output_dir,
+            "data_analysis": data_analysis_output_dir,
+            "protocol_optimization": optimization_output_dir,
+        },
+        extra={"entrypoint": "orchestrator", "event": "configure"},
+    )
     return {
         **state,
-        "protocol_output_dir": _protocol_output_dir(state.get("protocol_output_dir")),
-        "data_analysis_output_dir": _data_analysis_output_dir(state.get("data_analysis_output_dir")),
-        "optimization_output_dir": _optimization_output_dir(state.get("optimization_output_dir")),
+        "protocol_output_dir": protocol_output_dir,
+        "data_analysis_output_dir": data_analysis_output_dir,
+        "optimization_output_dir": optimization_output_dir,
+        "user_id": context.user_id,
+        "run_id": context.run_id,
+        "trace_id": context.trace_id,
+        "workspace_root": str(context.workspace_root),
         "max_features": int(state.get("max_features") or os.getenv("PROTOCOL_QUERY_MAX_FEATURES") or 40),
     }
 
@@ -248,6 +501,10 @@ def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorStat
                 "question": question,
                 "protocol_output_dir": _protocol_output_dir(state.get("protocol_output_dir")),
                 "max_features": int(state.get("max_features") or 40),
+                "user_id": state.get("user_id", ""),
+                "run_id": state.get("run_id", ""),
+                "trace_id": state.get("trace_id", ""),
+                "workspace_root": state.get("workspace_root", ""),
             }
         )
     elif route == "data_analysis_agent":
@@ -255,6 +512,10 @@ def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorStat
             {
                 "question": question,
                 "data_analysis_output_dir": _data_analysis_output_dir(state.get("data_analysis_output_dir")),
+                "user_id": state.get("user_id", ""),
+                "run_id": state.get("run_id", ""),
+                "trace_id": state.get("trace_id", ""),
+                "workspace_root": state.get("workspace_root", ""),
             }
         )
     else:
@@ -264,6 +525,10 @@ def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorStat
                 "protocol_output_dir": _protocol_output_dir(state.get("protocol_output_dir")),
                 "data_analysis_output_dir": _data_analysis_output_dir(state.get("data_analysis_output_dir")),
                 "optimization_output_dir": _optimization_output_dir(state.get("optimization_output_dir")),
+                "user_id": state.get("user_id", ""),
+                "run_id": state.get("run_id", ""),
+                "trace_id": state.get("trace_id", ""),
+                "workspace_root": state.get("workspace_root", ""),
             }
         )
     content = (
@@ -273,7 +538,9 @@ def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorStat
     return {**state, "messages": [AIMessage(content=content)]}
 
 
-def classify_route(question: str) -> Literal["protocol_analysis_agent", "data_analysis_agent", "protocol_optimizing_agent"]:
+def classify_route(
+    question: str,
+) -> Literal["protocol_analysis_agent", "data_analysis_agent", "protocol_optimizing_agent"]:
     normalized = question.lower()
     optimization_terms = (
         "优化",
@@ -317,6 +584,194 @@ def classify_route(question: str) -> Literal["protocol_analysis_agent", "data_an
     if any(term in normalized for term in data_terms):
         return "data_analysis_agent"
     return "protocol_analysis_agent"
+
+
+def _select_data_analysis_operation(question: str) -> str:
+    normalized = question.lower()
+    if any(term in normalized for term in ("de", "differential", "差异表达", "差异基因")):
+        return "differential_expression"
+    if any(term in normalized for term in ("gene expression", "expression", "表达量", "基因表达")):
+        return "gene_expression"
+    if any(term in normalized for term in ("marker", "标记基因")):
+        return "marker_score"
+    if any(term in normalized for term in ("composition", "cell type", "proportion", "细胞组成", "细胞类型", "比例")):
+        return "cell_type_composition"
+    if any(term in normalized for term in ("maturity", "成熟度")):
+        return "maturity"
+    if any(term in normalized for term in ("similarity", "reference", "相似度", "参考图谱")):
+        return "reference_similarity"
+    return "summary"
+
+
+def _data_operation_output_file(operation: str) -> str:
+    return {
+        "summary": "data_analysis_protocol_summary.csv",
+        "cell_type_composition": "cell_type_composition.csv",
+        "marker_score": "marker_scores.csv",
+        "gene_expression": "gene_expression_summary.csv",
+        "differential_expression": "differential_expression.csv",
+        "maturity": "maturity_scores.csv",
+        "reference_similarity": "similarity_scores.csv",
+    }.get(operation, "data_analysis_protocol_summary.csv")
+
+
+def _data_analysis_provenance(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "protocol_id": row.get("protocol_id", ""),
+            "dataset_id": row.get("dataset_id", ""),
+            "sample_id": row.get("sample_id", ""),
+            "condition_id": row.get("condition_id", ""),
+            "h5ad_path": row.get("h5ad_path", ""),
+            "cell_type_column": row.get("cell_type_column", ""),
+            "batch_column": row.get("batch_column", ""),
+            "lineage_column": row.get("lineage_column", ""),
+        }
+        for row in summaries
+    ]
+
+
+def _protocol_used_tools(result: dict[str, Any]) -> list[str]:
+    intent = str(result.get("intent") or "")
+    if intent == "compare_protocols":
+        return ["find_protocols", "compare_protocols"]
+    if intent:
+        return [intent]
+    return ["ProtocolQueryEngine.answer_question"]
+
+
+def _protocol_used_features(result: dict[str, Any]) -> list[str]:
+    tool_result = result.get("tool_result", {})
+    differences = tool_result.get("feature_differences", []) if isinstance(tool_result, dict) else []
+    return [str(row.get("feature") or "") for row in differences[:50] if row.get("feature")]
+
+
+def _protocol_evidence_refs(result: dict[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    tool_result = result.get("tool_result", {})
+    if not isinstance(tool_result, dict):
+        return refs
+    for side in ("protocol_a", "protocol_b"):
+        summary = tool_result.get(side, {})
+        if isinstance(summary, dict):
+            metadata = summary.get("metadata", {})
+            refs.append(
+                {
+                    "source": side,
+                    "protocol_id": summary.get("protocol_id") or metadata.get("protocol_id", ""),
+                    "paper_id": metadata.get("paper_id", ""),
+                    "evidence_type": "protocol_summary",
+                }
+            )
+    for event_group in ("protocol_a_representative_events", "protocol_b_representative_events"):
+        for event in tool_result.get("factor_diff", {}).get(event_group, [])[:20]:
+            refs.append(
+                {
+                    "source": event_group,
+                    "factor_type": event.get("factor_type", ""),
+                    "normalized_family": event.get("normalized_family", ""),
+                    "evidence_quote": event.get("evidence_quote", ""),
+                }
+            )
+    return refs
+
+
+def _protocol_confidence_caveats(result: dict[str, Any]) -> list[str]:
+    caveats: list[str] = []
+    if result.get("status") != "ok":
+        caveats.append(f"Protocol Analysis Agent returned status={result.get('status')}.")
+    tool_result = result.get("tool_result", {})
+    if isinstance(tool_result, dict) and tool_result.get("audit_warnings"):
+        caveats.append("Protocol-level audit warnings are available and should be considered.")
+    if not _protocol_evidence_refs(result):
+        caveats.append("No detailed evidence references were returned for this query path.")
+    return caveats
+
+
+def _data_operation_tool_name(operation: str) -> str:
+    return {
+        "summary": "data_analysis_summary",
+        "cell_type_composition": "cell_type_composition",
+        "marker_score": "marker_score_analysis",
+        "gene_expression": "query_gene_expression",
+        "differential_expression": "differential_expression",
+        "maturity": "gene_program_maturity_score",
+        "reference_similarity": "reference_similarity",
+    }.get(operation, operation)
+
+
+def _data_used_features(operation: str, rows: list[dict[str, str]]) -> list[str]:
+    if operation in {"gene_expression", "differential_expression"}:
+        return sorted({row.get("gene", "") for row in rows if row.get("gene")})[:50]
+    if operation == "marker_score":
+        return sorted({row.get("marker_set", "") for row in rows if row.get("marker_set")})[:50]
+    if operation == "cell_type_composition":
+        return sorted({row.get("cell_type", "") for row in rows if row.get("cell_type")})[:50]
+    if operation == "maturity":
+        return sorted({row.get("lineage", "") for row in rows if row.get("lineage")})[:50]
+    return []
+
+
+def _data_evidence_refs(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "evidence_type": "h5ad_dataset_summary",
+            "protocol_id": row.get("protocol_id", ""),
+            "dataset_id": row.get("dataset_id", ""),
+            "sample_id": row.get("sample_id", ""),
+            "condition_id": row.get("condition_id", ""),
+            "h5ad_path": row.get("h5ad_path", ""),
+        }
+        for row in summaries
+    ]
+
+
+def _data_confidence_caveats(status: str, limitations: list[dict[str, Any]]) -> list[str]:
+    caveats: list[str] = []
+    if status != "ok":
+        caveats.append(f"Data Analysis Agent returned status={status}.")
+    if limitations:
+        caveats.append("Data Analysis Agent reported limitations; inspect h5ad_analysis_limitations.json.")
+    return caveats
+
+
+def _optimization_evidence_refs(candidates: list[dict[str, str]], risk_report: dict[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for row in candidates[:20]:
+        refs.append(
+            {
+                "evidence_type": "optimization_candidate_feature",
+                "feature": row.get("feature", ""),
+                "evidence_status": row.get("evidence_status", ""),
+                "confidence": row.get("confidence", ""),
+            }
+        )
+    for rec in risk_report.get("recommendations", [])[:20] if isinstance(risk_report, dict) else []:
+        refs.append(
+            {
+                "evidence_type": "optimization_recommendation",
+                "recommendation_id": rec.get("recommendation_id", ""),
+                "confidence": rec.get("confidence", ""),
+                "requires_experimental_validation": rec.get("requires_experimental_validation", ""),
+            }
+        )
+    return refs
+
+
+def _optimization_confidence_caveats(
+    status: str,
+    candidates: list[dict[str, str]],
+    risk_report: dict[str, Any],
+) -> list[str]:
+    caveats = ["Optimization outputs are hypotheses, not causal protocol-change conclusions."]
+    if status != "optimization_ran" and status != "ok_cached_optimization_outputs":
+        caveats.append(f"Protocol Optimizing Agent returned status={status}.")
+    if not candidates:
+        caveats.append("No optimization candidate feature table was available.")
+    policy = risk_report.get("recommendation_policy") or risk_report.get("risk_policy") if isinstance(risk_report, dict) else ""
+    if policy:
+        caveats.append(str(policy))
+    return caveats
 
 
 def _route_after_orchestrator(state: OrchestratorState) -> Literal["subagents", "end"]:

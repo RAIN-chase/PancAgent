@@ -51,7 +51,9 @@ def create_app() -> Any:
     try:
         from fastapi import FastAPI
     except ImportError as exc:
-        raise RuntimeError("FastAPI is required for the backend API. Install project dependencies with `pip install -e .`.") from exc
+        raise RuntimeError(
+            "FastAPI is required for the backend API. Install project dependencies with `pip install -e .`."
+        ) from exc
 
     app = FastAPI(
         title="ProtocolOptimizationAgent Backend API",
@@ -133,9 +135,13 @@ def main() -> None:
     try:
         import uvicorn
     except ImportError as exc:
-        raise RuntimeError("uvicorn is required to run the backend API. Install project dependencies with `pip install -e .`.") from exc
+        raise RuntimeError(
+            "uvicorn is required to run the backend API. Install project dependencies with `pip install -e .`."
+        ) from exc
 
-    uvicorn.run("protocol_optimization_agent.api:create_app", host=args.host, port=args.port, reload=args.reload, factory=True)
+    uvicorn.run(
+        "protocol_optimization_agent.api:create_app", host=args.host, port=args.port, reload=args.reload, factory=True
+    )
 
 
 if __name__ == "__main__":

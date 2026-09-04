@@ -6,7 +6,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from protocol_optimization_agent.llm_client import LLMClient, OfflineLLMClient
-from protocol_optimization_agent.schemas import Confidence, ProtocolStrategySummary, SemanticStageAnnotation, StrategyModule
+from protocol_optimization_agent.schemas import (
+    Confidence,
+    ProtocolStrategySummary,
+    SemanticStageAnnotation,
+    StrategyModule,
+)
 
 
 def annotate_protocol_semantics(
@@ -32,10 +37,16 @@ def annotate_protocol_semantics(
         protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
         if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
             continue
-        for stage in sorted(record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999):
-            candidate = _rule_stage_annotation(protocol_id, stage, events_by_stage[(protocol_id, str(stage.get("stage_id") or ""))])
+        for stage in sorted(
+            record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999
+        ):
+            candidate = _rule_stage_annotation(
+                protocol_id, stage, events_by_stage[(protocol_id, str(stage.get("stage_id") or ""))]
+            )
             if candidate["confidence"] == Confidence.LOW and llm_calls < max_llm_stages:
-                llm_candidate = _llm_stage_annotation(protocol_id, stage, events_by_stage[(protocol_id, str(stage.get("stage_id") or ""))], client)
+                llm_candidate = _llm_stage_annotation(
+                    protocol_id, stage, events_by_stage[(protocol_id, str(stage.get("stage_id") or ""))], client
+                )
                 llm_calls += 1
                 if llm_candidate is not None:
                     candidate = llm_candidate
@@ -49,7 +60,9 @@ def annotate_protocol_semantics(
                 candidate.setdefault("validation_notes", []).append("semantic_annotation_schema_fallback")
                 annotations.append(SemanticStageAnnotation.model_validate(candidate).model_dump(mode="json"))
 
-    summaries = _build_protocol_strategy_summaries(protocol_records, annotations, events_by_protocol, accepted_protocol_ids)
+    summaries = _build_protocol_strategy_summaries(
+        protocol_records, annotations, events_by_protocol, accepted_protocol_ids
+    )
     return annotations, {"protocols": summaries}, {"llm_calls": llm_calls}
 
 
@@ -82,7 +95,9 @@ def _rule_stage_annotation(protocol_id: str, stage: dict[str, Any], events: list
     if not modules:
         modules = [StrategyModule.UNKNOWN]
 
-    confidence = Confidence.HIGH if modules != [StrategyModule.UNKNOWN] and stage.get("evidence_quote") else Confidence.LOW
+    confidence = (
+        Confidence.HIGH if modules != [StrategyModule.UNKNOWN] and stage.get("evidence_quote") else Confidence.LOW
+    )
     culture_system = _culture_system(stage, events)
     return {
         "protocol_id": protocol_id,
@@ -90,7 +105,9 @@ def _rule_stage_annotation(protocol_id: str, stage: dict[str, Any], events: list
         "stage_index": stage.get("stage_index"),
         "biological_role": modules[0],
         "strategy_modules": _dedupe_modules(modules),
-        "key_factors": sorted({str(event.get("normalized_name") or "") for event in events if event.get("normalized_name")})[:20],
+        "key_factors": sorted(
+            {str(event.get("normalized_name") or "") for event in events if event.get("normalized_name")}
+        )[:20],
         "culture_system": culture_system,
         "evidence_quote": stage.get("evidence_quote") or _first_event_quote(events),
         "confidence": confidence,
@@ -180,14 +197,20 @@ def _build_protocol_strategy_summaries(
 def _is_maturation_factor_name(name: str) -> bool:
     normalized = name.lower().replace("-", " ").replace("_", " ")
     tokens = {token.strip("()[];,.:") for token in normalized.split()}
-    return bool(
-        {"t3", "heparin", "zinc", "znso4", "alk5", "alk5i", "betacellulin"} & tokens
-    )
+    return bool({"t3", "heparin", "zinc", "znso4", "alk5", "alk5i", "betacellulin"} & tokens)
 
 
 def _culture_system(stage: dict[str, Any], events: list[dict[str, Any]]) -> str:
-    text = " ".join([str(stage.get("culture_format") or ""), str(stage.get("key_operations") or ""), " ".join(str(e.get("normalized_name") or "") for e in events)]).lower()
-    if any(token in text for token in ("2d", "adherent", "plate", "monolayer")) and any(token in text for token in ("3d", "suspension", "aggregate", "ula")):
+    text = " ".join(
+        [
+            str(stage.get("culture_format") or ""),
+            str(stage.get("key_operations") or ""),
+            " ".join(str(e.get("normalized_name") or "") for e in events),
+        ]
+    ).lower()
+    if any(token in text for token in ("2d", "adherent", "plate", "monolayer")) and any(
+        token in text for token in ("3d", "suspension", "aggregate", "ula")
+    ):
         return "2d_to_3d_transition"
     if any(token in text for token in ("suspension", "aggregate", "ula", "shaker")):
         return "3d_or_suspension"

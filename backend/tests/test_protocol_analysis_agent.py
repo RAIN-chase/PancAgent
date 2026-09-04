@@ -175,7 +175,9 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
     assert embedding_rows[0]["protocol_id"] == "p1"
     assert embedding_rows[0]["protocol_cluster"]
 
-    normalized = [json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()]
+    normalized = [
+        json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()
+    ]
     assert normalized[0]["normalized_family"] == "TGF-beta/Nodal activation family"
 
     strategies = json.loads(outputs["protocol_strategy_summary"].read_text(encoding="utf-8"))
@@ -193,7 +195,9 @@ def test_protocol_analysis_agent_accepts_mock_llm_for_unknown_factor(tmp_path: P
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
-            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Novel factor X"}],
+            "stages": [
+                {"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Novel factor X"}
+            ],
         }
     ]
     events = [
@@ -234,7 +238,9 @@ def test_protocol_analysis_agent_accepts_mock_llm_for_unknown_factor(tmp_path: P
         llm_client=llm_client,
     ).run(records, events, [])
 
-    normalized = [json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()]
+    normalized = [
+        json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()
+    ]
     assert normalized[0]["normalization_source"] == "llm"
     assert normalized[0]["normalized_family"] == "Experimental signaling family"
     assert llm_client.calls[0]["task"] == "factor_event_normalizer"
@@ -248,7 +254,14 @@ def test_llm_feature_discovery_adds_candidate_column_without_approval(tmp_path: 
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
-            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Cells underwent custom protocol step X."}],
+            "stages": [
+                {
+                    "stage_id": "s1",
+                    "stage_index": 1,
+                    "stage_name": "Stage 1",
+                    "evidence_quote": "Cells underwent custom protocol step X.",
+                }
+            ],
         }
     ]
     events = [
@@ -315,7 +328,14 @@ def test_llm_feature_discovery_rejects_columns_without_source_evidence(tmp_path:
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
-            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Cells were cultured in standard medium."}],
+            "stages": [
+                {
+                    "stage_id": "s1",
+                    "stage_index": 1,
+                    "stage_name": "Stage 1",
+                    "evidence_quote": "Cells were cultured in standard medium.",
+                }
+            ],
         }
     ]
     events = [
@@ -421,7 +441,9 @@ def test_approved_feature_specs_are_compiled_by_explicit_dsl(tmp_path: Path) -> 
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
-            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Activin A was used."}],
+            "stages": [
+                {"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Activin A was used."}
+            ],
         }
     ]
     events = [
@@ -485,7 +507,9 @@ def test_protocol_analysis_agent_does_not_reagent_normalize_non_reagent_from_quo
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
-            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Activin was added."}],
+            "stages": [
+                {"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "evidence_quote": "Activin was added."}
+            ],
         }
     ]
     events = [
@@ -513,7 +537,9 @@ def test_protocol_analysis_agent_does_not_reagent_normalize_non_reagent_from_quo
         },
     ).run(records, events, [])
 
-    normalized = [json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()]
+    normalized = [
+        json.loads(line) for line in outputs["normalized_factor_events"].read_text(encoding="utf-8").splitlines()
+    ]
     assert normalized[0]["factor_type"] == "qc_marker"
     assert normalized[0]["normalized_family"] == "qc_marker"
 
@@ -526,7 +552,16 @@ def test_protocol_query_layer_compares_generated_outputs(tmp_path: Path) -> None
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
-            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "DE", "day_start": 0, "day_end": 3, "evidence_quote": "Activin A"}],
+            "stages": [
+                {
+                    "stage_id": "s1",
+                    "stage_index": 1,
+                    "stage_name": "DE",
+                    "day_start": 0,
+                    "day_end": 3,
+                    "evidence_quote": "Activin A",
+                }
+            ],
         },
         {
             "protocol_id": "p2",
@@ -534,7 +569,16 @@ def test_protocol_query_layer_compares_generated_outputs(tmp_path: Path) -> None
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p2", "protocol_name": "Protocol B", "number_of_stages": 1},
-            "stages": [{"stage_id": "s2", "stage_index": 1, "stage_name": "Maturation", "day_start": 10, "day_end": 20, "evidence_quote": "T3"}],
+            "stages": [
+                {
+                    "stage_id": "s2",
+                    "stage_index": 1,
+                    "stage_name": "Maturation",
+                    "day_start": 10,
+                    "day_end": 20,
+                    "evidence_quote": "T3",
+                }
+            ],
         },
     ]
     events = [
@@ -633,6 +677,7 @@ def test_protocol_query_layer_finds_author_year_with_normalized_tokens(tmp_path:
     hits = ProtocolQueryEngine(tmp_path).find_protocols("Akgün 2024")
     assert hits[0]["protocol_id"] == "p1"
     assert hits[0]["matched_tokens"] == ["2024", "akgun"]
+
 
 def test_protocol_query_layer_generates_feature_heatmap(tmp_path: Path) -> None:
     matrix_path = tmp_path / "protocol_feature_matrix.csv"

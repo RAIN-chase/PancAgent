@@ -13,7 +13,6 @@ from langgraph.prebuilt import InjectedState, ToolNode
 
 from protocol_optimization_agent.query_engine import ProtocolQueryEngine
 
-
 DEFAULT_OUTPUT_DIR = "runs/protocol_analysis_agent_simplified_autofeatures"
 
 SYSTEM_PROMPT = """You are ProtocolOptimizationAgent, a tool-using scientific protocol analysis assistant.
@@ -262,7 +261,9 @@ def _build_chat_model_from_env() -> Runnable | None:
 
     from langchain_openai import ChatOpenAI
 
-    api_key_env = os.getenv("PROTOCOL_CHAT_API_KEY_ENV") or ("DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY")
+    api_key_env = os.getenv("PROTOCOL_CHAT_API_KEY_ENV") or (
+        "DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY"
+    )
     api_key = os.getenv(api_key_env)
     if not api_key:
         raise RuntimeError(f"Missing chat LLM API key environment variable: {api_key_env}")

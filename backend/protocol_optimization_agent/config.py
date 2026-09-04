@@ -17,7 +17,7 @@ class ProtocolOptimizationConfig:
     optimization_objective: dict[str, Any]
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "ProtocolOptimizationConfig":
+    def from_file(cls, path: str | Path) -> ProtocolOptimizationConfig:
         config_path = Path(path)
         data = json.loads(config_path.read_text(encoding="utf-8"))
         base = Path.cwd()

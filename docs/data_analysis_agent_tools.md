@@ -11,17 +11,81 @@ This document defines the initial tool surface for quantitative comparison of pa
 
 ## Current Framework Tools
 
-The executable framework is in `backend/protocol_optimization_agent/agents/data_analysis.py`. The stable tool contracts are in `backend/protocol_optimization_agent/tools/h5ad_tools.py`.
+The executable framework is in `backend/protocol_optimization_agent/agents/data_analysis.py`. The stable tool contracts are in `backend/protocol_optimization_agent/tools/h5ad_tools.py` and `backend/protocol_optimization_agent/tools/external_data_tools.py`.
+
+External tool source checkouts are stored under:
+
+```text
+external_tools/data_analysis/
+```
+
+Downloaded external sources:
+
+| Tool | Local path | Source |
+| --- | --- | --- |
+| Scanpy | `external_tools/data_analysis/scanpy` | `https://github.com/scverse/scanpy` |
+| scvi-tools | `external_tools/data_analysis/scvi-tools` | `https://github.com/scverse/scvi-tools` |
+| scib-metrics | `external_tools/data_analysis/scib-metrics` | `https://github.com/yoseflab/scib-metrics` |
+| CellTypist | `external_tools/data_analysis/celltypist` | `https://github.com/Teichlab/celltypist` |
+| GSEApy | `external_tools/data_analysis/gseapy` | `https://github.com/zqfang/GSEApy` |
+| pySCENIC | `external_tools/data_analysis/pyscenic` | `https://github.com/aertslab/pySCENIC` |
+| CellOracle | `external_tools/data_analysis/celloracle` | `https://github.com/morris-lab/CellOracle` |
+| CellRank | `external_tools/data_analysis/cellrank` | `https://github.com/scverse/cellrank` |
+| scVelo | `external_tools/data_analysis/scvelo` | `https://github.com/theislab/scvelo` |
+
+`DataAnalysisAgent.call_tool(tool_id, config)` can call the registered wrapper for each external tool. The wrappers currently return structured readiness results and dependency/source status; heavier numeric execution should be implemented inside the wrapper functions after runtime dependencies and h5ad test fixtures are available.
 
 | Tool id | Current status | Output |
 | --- | --- | --- |
 | `dataset_manifest_gate` | implemented placeholder | `h5ad_qc_report.json` |
-| `cell_type_composition` | implemented placeholder | `cell_type_composition.csv` |
-| `marker_score_analysis` | implemented placeholder | `marker_scores.csv` |
+| `cell_type_composition` | implemented | `cell_type_composition.csv` |
+| `query_gene_expression` | implemented | `gene_expression_summary.csv` |
+| `differential_expression` | implemented | `differential_expression.csv` |
+| `marker_score_analysis` | implemented | `marker_scores.csv` |
 | `gene_program_maturity_score` | stub pending implementation | `maturity_scores.csv`, `gene_program_scores.csv` |
 | `reference_similarity` | stub pending implementation | `similarity_scores.csv` |
 | `regulatory_program_placeholder` | stub pending external tool | `regulatory_program_scores.csv` |
 | `trajectory_placeholder` | stub pending external tool | `trajectory_scores.csv` |
+| `external_tool_inventory` | implemented | `external_tool_inventory.csv` |
+
+## First-Pass h5ad Execution
+
+The local anndata-backed implementation supports:
+
+- h5ad file and dependency validation.
+- Dataset inventory: `n_obs`, `n_vars`, obs columns, layers, embeddings, and raw availability.
+- Cell-type composition from a configured annotation column.
+- Target gene expression summaries by all cells or by an obs grouping column.
+- Marker/gene-program scores as mean expression over found target genes.
+- Lightweight differential expression for configured target genes between two obs groups.
+
+Example config:
+
+```python
+h5ad_config = {
+    "annotation_cell_type_column": "cell_type",
+    "batch_column": "batch",
+    "lineage_column": "lineage",
+    "marker_sets": {"beta_marker": ["INS", "IAPP", "MAFA"]},
+    "query_genes": ["INS", "IAPP", "GCG", "SOX9"],
+    "expression_groupby": "cell_type",
+    "differential_expression": {
+        "groupby": "cell_type",
+        "group_a": "beta",
+        "group_b": "alpha",
+        "genes": ["INS", "GCG"],
+    },
+    "backed": True,
+    "max_target_genes": 200,
+}
+```
+
+Server-side constraints:
+
+- Use `backed=True` for metadata and target-gene reads unless a downstream method requires in-memory AnnData.
+- Do not densify the full matrix by default; current tools only materialize one target-gene vector at a time.
+- Keep `.h5ad`, large `inputs/`, large `runs/`, and `external_tools/` out of commits.
+- Use Linux absolute paths in server manifests.
 
 ## Recommended External Tool Categories
 
@@ -79,7 +143,7 @@ These tools can be added to the local tools registry as wrappers instead of bein
 ## Minimum Next Implementation Order
 
 1. Implement `scanpy_h5ad_profile_tool` for real h5ad loading, obs/var audit, composition, QC, marker scores, and gene program scores.
-2. Implement `gene_program_maturity_score` with user-provided lineage programs using average scaled expression, AUCell/ssGSEA, and reference-normalized z scores.
+2. Upgrade `gene_program_maturity_score` from placeholder maturity rows to reference-normalized lineage maturity scores.
 3. Implement `reference_similarity` using matched genes and matched cell types with cosine similarity and Euclidean distance on pseudobulk expression and latent embeddings.
 4. Add `scib-metrics` to quantify whether the provided de-batched organoid h5ad preserves cell identity while reducing batch structure.
 5. Add GRN and trajectory wrappers only after the base transcriptomic comparison is reproducible.
@@ -93,6 +157,8 @@ The agent should always export:
 - `cell_type_composition.csv`
 - `marker_scores.csv`
 - `gene_program_scores.csv`
+- `gene_expression_summary.csv`
+- `differential_expression.csv`
 - `maturity_scores.csv`
 - `similarity_scores.csv`
 - `regulatory_program_scores.csv`
@@ -100,4 +166,6 @@ The agent should always export:
 - `data_analysis_protocol_summary.csv`
 - `data_analysis_tool_registry.json`
 - `data_analysis_comparison_report.json`
+- `external_tool_inventory.csv`
+- `data_analysis_query_result.json`
 - `h5ad_analysis_limitations.json`

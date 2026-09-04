@@ -63,4 +63,4 @@ def test_orchestrator_smoke(tmp_path: Path) -> None:
 
     assert not state.missing_inputs
     assert (output_dir / "pipeline_run_log.json").exists()
-    assert (output_dir / "integration_optimization" / "proposed_improved_protocol.md").exists()
+    assert (output_dir / "protocol_optimization" / "proposed_improved_protocol.md").exists()

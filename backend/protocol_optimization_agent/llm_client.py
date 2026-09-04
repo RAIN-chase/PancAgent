@@ -71,7 +71,9 @@ class OpenAIJSONLLMClient:
                 },
                 {
                     "role": "user",
-                    "content": json.dumps({"task": task, "schema_name": schema_name, "payload": payload}, ensure_ascii=False),
+                    "content": json.dumps(
+                        {"task": task, "schema_name": schema_name, "payload": payload}, ensure_ascii=False
+                    ),
                 },
             ],
         }
@@ -98,8 +100,13 @@ def build_llm_client(config: dict[str, Any] | None) -> LLMClient:
     if provider in {"openai", "openai_compatible", "deepseek"}:
         return OpenAIJSONLLMClient(
             model=str(config["model"]),
-            api_key_env=str(config.get("api_key_env") or ("DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY")),
-            base_url=str(config.get("base_url") or ("https://api.deepseek.com" if provider == "deepseek" else "https://api.openai.com/v1")),
+            api_key_env=str(
+                config.get("api_key_env") or ("DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY")
+            ),
+            base_url=str(
+                config.get("base_url")
+                or ("https://api.deepseek.com" if provider == "deepseek" else "https://api.openai.com/v1")
+            ),
             timeout_seconds=int(config.get("timeout_seconds") or 60),
         )
     raise ValueError(f"Unsupported llm provider: {provider}")

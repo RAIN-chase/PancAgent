@@ -4,7 +4,6 @@ from pathlib import Path
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
 from protocol_optimization_agent.langgraph_server import TOOLS, build_protocol_chat_graph
 
@@ -17,7 +16,16 @@ def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
-            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "DE", "day_start": 0, "day_end": 3, "evidence_quote": "Activin A"}],
+            "stages": [
+                {
+                    "stage_id": "s1",
+                    "stage_index": 1,
+                    "stage_name": "DE",
+                    "day_start": 0,
+                    "day_end": 3,
+                    "evidence_quote": "Activin A",
+                }
+            ],
         },
         {
             "protocol_id": "p2",
@@ -25,7 +33,16 @@ def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:
             "comparison_ready": True,
             "confidence": {"extraction": "high"},
             "protocol": {"protocol_id": "p2", "protocol_name": "Protocol B", "number_of_stages": 1},
-            "stages": [{"stage_id": "s2", "stage_index": 1, "stage_name": "Maturation", "day_start": 10, "day_end": 20, "evidence_quote": "T3"}],
+            "stages": [
+                {
+                    "stage_id": "s2",
+                    "stage_index": 1,
+                    "stage_name": "Maturation",
+                    "day_start": 10,
+                    "day_end": 20,
+                    "evidence_quote": "T3",
+                }
+            ],
         },
     ]
     events = [
@@ -103,6 +120,7 @@ def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:
     assert tool_names.count("find_protocols") == 2
     assert "compare_protocols" in tool_names
     assert "结构化比较" in result["messages"][-1].content
+
 
 def test_langgraph_server_exposes_heatmap_tool() -> None:
     assert "plot_protocol_feature_heatmap" in [tool.name for tool in TOOLS]

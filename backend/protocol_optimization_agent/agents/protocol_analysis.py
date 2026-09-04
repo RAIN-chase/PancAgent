@@ -15,7 +15,6 @@ from protocol_optimization_agent.normalization import normalize_factor_events
 from protocol_optimization_agent.schemas import Confidence, FactorEvent, ProtocolRecord, StageRecord, TemporalAnnotation
 from protocol_optimization_agent.semantic_annotation import annotate_protocol_semantics
 
-
 REAGENT_FAMILIES: dict[str, tuple[str, ...]] = {
     "Activin": ("activin", "acta"),
     "CHIR": ("chir99021", "chir", "gsk3"),
@@ -54,21 +53,73 @@ KEY_FACTOR_TYPES_REQUIRING_EVIDENCE = {
 DEFAULT_ALLOWED_EVENT_STATUSES = {"evidence_supported"}
 
 ACTION_CATEGORY_PATTERNS: dict[str, tuple[str, ...]] = {
-    "add_reagent_or_factor": ("add", "added", "addition", "supplement", "supplemented", "treat", "treated", "expos", "containing", "with"),
+    "add_reagent_or_factor": (
+        "add",
+        "added",
+        "addition",
+        "supplement",
+        "supplemented",
+        "treat",
+        "treated",
+        "expos",
+        "containing",
+        "with",
+    ),
     "medium_change_or_replace": ("change", "changed", "replace", "replaced", "refresh", "feed", "fed"),
-    "culture_or_incubate": ("culture", "cultured", "incubat", "maintain", "maintained", "differentiat", "grown", "grow"),
+    "culture_or_incubate": (
+        "culture",
+        "cultured",
+        "incubat",
+        "maintain",
+        "maintained",
+        "differentiat",
+        "grown",
+        "grow",
+    ),
     "wash": ("wash", "washed", "rinse", "rinsed"),
     "dissociation": ("dissociat", "detach", "detached", "trypsin", "accutase", "single-cell", "single cell"),
     "passage": ("passag", "split", "subcultur"),
     "seed_or_plate": ("seed", "seeded", "plate", "plated", "replate", "replated"),
     "transfer": ("transfer", "transferred", "move", "moved"),
     "aggregation_or_3d_formation": ("aggregat", "reaggregat", "cluster", "spheroid", "organoid", "embryoid bod"),
-    "matrix_or_coating": ("coat", "coated", "matrix", "matrigel", "laminin", "collagen", "embed", "embedded", "overlay"),
+    "matrix_or_coating": (
+        "coat",
+        "coated",
+        "matrix",
+        "matrigel",
+        "laminin",
+        "collagen",
+        "embed",
+        "embedded",
+        "overlay",
+    ),
     "suspension_or_shaking": ("suspension", "spinner", "shak", "rotat", "orbital", "stir"),
     "sorting_or_enrichment": ("sort", "sorted", "facs", "macs", "enrich", "enriched", "purif"),
     "infection_or_transduction": ("infect", "infection", "transduc", "lentivirus", "virus", "spinfection"),
-    "genetic_perturbation": ("crispr", "knockdown", "knockout", "sirna", "shrna", "transfect", "transfection", "overexpress"),
-    "assay_or_qc": ("assay", "stain", "staining", "immunostain", "qpcr", "rt-pcr", "flow cytometry", "facs analysis", "measure", "marker", "glucose", "gsis"),
+    "genetic_perturbation": (
+        "crispr",
+        "knockdown",
+        "knockout",
+        "sirna",
+        "shrna",
+        "transfect",
+        "transfection",
+        "overexpress",
+    ),
+    "assay_or_qc": (
+        "assay",
+        "stain",
+        "staining",
+        "immunostain",
+        "qpcr",
+        "rt-pcr",
+        "flow cytometry",
+        "facs analysis",
+        "measure",
+        "marker",
+        "glucose",
+        "gsis",
+    ),
     "transplantation": ("transplant", "graft", "implanted", "kidney capsule", "in vivo"),
     "cryopreservation": ("cryopreserv", "freeze", "frozen", "thaw", "thawed"),
 }
@@ -309,16 +360,20 @@ class ProtocolAnalysisAgent:
         }
 
     def _node_feature_discovery(self, state: ProtocolAnalysisState) -> ProtocolAnalysisState:
-        final_rows, candidate_rows, cell_provenance, approved_registry, discovery_report = discover_and_compute_features(
-            state.get("protocol_records", []),
-            state.get("analysis_events", []),
-            state.get("feature_rows", []),
-            state.get("feature_provenance", {}),
-            state.get("accepted_protocol_ids", set()),
-            self.quality_filters,
-            llm_client=self.llm_client,
+        final_rows, candidate_rows, cell_provenance, approved_registry, discovery_report = (
+            discover_and_compute_features(
+                state.get("protocol_records", []),
+                state.get("analysis_events", []),
+                state.get("feature_rows", []),
+                state.get("feature_provenance", {}),
+                state.get("accepted_protocol_ids", set()),
+                self.quality_filters,
+                llm_client=self.llm_client,
+            )
         )
-        final_feature_provenance = cell_provenance.get("final_matrix", {}).get("feature_provenance", state.get("feature_provenance", {}))
+        final_feature_provenance = cell_provenance.get("final_matrix", {}).get(
+            "feature_provenance", state.get("feature_provenance", {})
+        )
         quantification_coverage_report = _build_quantification_coverage_report(
             state.get("analysis_events", []),
             final_rows,
@@ -404,8 +459,14 @@ class ProtocolAnalysisAgent:
         write_jsonl(outputs["standardized_protocol_representations"], state.get("standardized_protocols", []))
         write_json(outputs["protocol_workflow_graphs"], state.get("workflow_graphs", {}))
         write_csv_dicts(outputs["protocol_feature_matrix_raw"], state.get("raw_feature_rows", []))
-        write_json(outputs["base_feature_registry"], state.get("feature_discovery_audit_report", {}).get("base_feature_registry", {}))
-        write_json(outputs["llm_proposed_feature_registry"], state.get("feature_discovery_audit_report", {}).get("llm_proposed_feature_registry", {}))
+        write_json(
+            outputs["base_feature_registry"],
+            state.get("feature_discovery_audit_report", {}).get("base_feature_registry", {}),
+        )
+        write_json(
+            outputs["llm_proposed_feature_registry"],
+            state.get("feature_discovery_audit_report", {}).get("llm_proposed_feature_registry", {}),
+        )
         write_json(outputs["approved_feature_registry"], state.get("approved_feature_registry", {}))
         write_json(outputs["predefined_feature_registry"], state.get("predefined_feature_registry", {}))
         write_csv_dicts(outputs["protocol_candidate_feature_matrix"], state.get("candidate_feature_rows", []))
@@ -467,7 +528,12 @@ class ProtocolAnalysisAgent:
             comparison_ready = bool(record.get("comparison_ready", True))
             validation_flags = _validation_flag_names(record.get("validation_flags"))
             excluded = sorted(validation_flags.intersection(excluded_flags))
-            passed = bool(protocol_id) and confidence_score >= min_conf and (comparison_ready or not require_ready) and not excluded
+            passed = (
+                bool(protocol_id)
+                and confidence_score >= min_conf
+                and (comparison_ready or not require_ready)
+                and not excluded
+            )
             quality_rows.append(
                 {
                     "protocol_id": protocol_id,
@@ -496,12 +562,14 @@ class ProtocolAnalysisAgent:
         factor_events: list[dict[str, Any]],
         accepted_protocol_ids: set[str],
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        allowed_statuses = set(self.quality_filters.get("allowed_event_validation_statuses", DEFAULT_ALLOWED_EVENT_STATUSES))
+        allowed_statuses = set(
+            self.quality_filters.get("allowed_event_validation_statuses", DEFAULT_ALLOWED_EVENT_STATUSES)
+        )
         reject_unparsed = bool(self.quality_filters.get("reject_unparsed_numeric_fields", True))
         require_quote = bool(self.quality_filters.get("require_evidence_quote_for_key_factors", True))
 
         kept: list[dict[str, Any]] = []
-        rejected = Counter()
+        rejected: Counter[str] = Counter()
         for event in factor_events:
             protocol_id = str(event.get("protocol_id") or "")
             if accepted_protocol_ids and protocol_id not in accepted_protocol_ids:
@@ -515,7 +583,11 @@ class ProtocolAnalysisAgent:
                 rejected["unparsed_numeric_field"] += 1
                 continue
             factor_type = str(event.get("factor_type") or "").strip()
-            if require_quote and factor_type in KEY_FACTOR_TYPES_REQUIRING_EVIDENCE and not _has_text(event.get("evidence_quote")):
+            if (
+                require_quote
+                and factor_type in KEY_FACTOR_TYPES_REQUIRING_EVIDENCE
+                and not _has_text(event.get("evidence_quote"))
+            ):
                 rejected["missing_evidence_quote_for_key_factor"] += 1
                 continue
             kept.append(dict(event))
@@ -557,7 +629,9 @@ def _validate_analysis_inputs(
                 StageRecord.model_validate(stage_payload)
                 valid_stages.append(stage)
             except ValidationError as exc:
-                findings.append(_schema_finding("stage_record", protocol_id, str(stage.get("stage_id") or ""), stage_index, exc))
+                findings.append(
+                    _schema_finding("stage_record", protocol_id, str(stage.get("stage_id") or ""), stage_index, exc)
+                )
         sanitized["stages"] = valid_stages
         valid_protocol_records.append(sanitized)
 
@@ -582,19 +656,23 @@ def _validate_analysis_inputs(
             event_with_schema_status["schema_status"] = "accepted_with_schema_findings"
         valid_factor_events.append(event_with_schema_status)
 
-    return valid_protocol_records, valid_factor_events, {
-        "summary": {
-            "n_input_protocol_records": len(protocol_records),
-            "n_valid_protocol_records": len(valid_protocol_records),
-            "n_input_factor_events": len(factor_events),
-            "n_valid_factor_events": len(valid_factor_events),
-            "n_rejected_factor_events": len(factor_events) - len(valid_factor_events),
-            "n_findings": len(findings),
-            "allow_invalid_events": allow_invalid_events,
-            "status": "passed" if not findings else "completed_with_schema_findings",
+    return (
+        valid_protocol_records,
+        valid_factor_events,
+        {
+            "summary": {
+                "n_input_protocol_records": len(protocol_records),
+                "n_valid_protocol_records": len(valid_protocol_records),
+                "n_input_factor_events": len(factor_events),
+                "n_valid_factor_events": len(valid_factor_events),
+                "n_rejected_factor_events": len(factor_events) - len(valid_factor_events),
+                "n_findings": len(findings),
+                "allow_invalid_events": allow_invalid_events,
+                "status": "passed" if not findings else "completed_with_schema_findings",
+            },
+            "findings": findings,
         },
-        "findings": findings,
-    }
+    )
 
 
 def _append_step(state: ProtocolAnalysisState, node_name: str) -> list[dict[str, Any]]:
@@ -634,7 +712,9 @@ def _build_temporal_annotations(
                 "temporal_confidence": confidence,
                 "evidence_quote": stage.get("evidence_quote") or "",
                 "source": "rule" if confidence != Confidence.LOW else "fallback",
-                "validation_notes": notes if notes else ([] if confidence != Confidence.LOW else ["missing_complete_stage_time"]),
+                "validation_notes": notes
+                if notes
+                else ([] if confidence != Confidence.LOW else ["missing_complete_stage_time"]),
             }
             annotations.append(TemporalAnnotation.model_validate(payload).model_dump(mode="json"))
     return annotations
@@ -708,18 +788,35 @@ def _group_protocol_feature_differences(differences: list[dict[str, Any]]) -> di
         payload.pop("rank", None)
         group = str(payload.pop("difference_group"))
         grouped[group].append(payload)
-    ordered_groups = ("strategy_module", "culture_system", "core_signaling_family", "workflow", "timing_or_exposure", "concentration", "audit_or_confidence", "other")
+    ordered_groups = (
+        "strategy_module",
+        "culture_system",
+        "core_signaling_family",
+        "workflow",
+        "timing_or_exposure",
+        "concentration",
+        "audit_or_confidence",
+        "other",
+    )
     return {group: grouped[group] for group in ordered_groups if grouped.get(group)}
 
 
 def _feature_group(feature: str) -> str:
     if feature.startswith("semantic_module_") or feature == "n_strategy_modules":
         return "strategy_module"
-    if feature in {"has_2d_adherent_culture", "has_suspension_culture", "has_shaking", "has_aggregation"} or "culture" in feature:
+    if (
+        feature in {"has_2d_adherent_culture", "has_suspension_culture", "has_shaking", "has_aggregation"}
+        or "culture" in feature
+    ):
         return "culture_system"
     if feature.startswith("norm_family_") or feature.endswith("_presence"):
         return "core_signaling_family"
-    if feature.startswith("num_") or feature.startswith("requires_") or feature.startswith("transition_") or feature in {"number_of_stages", "stage_transition_number"}:
+    if (
+        feature.startswith("num_")
+        or feature.startswith("requires_")
+        or feature.startswith("transition_")
+        or feature in {"number_of_stages", "stage_transition_number"}
+    ):
         return "workflow"
     if any(token in feature for token in ("day", "duration", "exposure")):
         return "timing_or_exposure"
@@ -770,7 +867,9 @@ def _schema_finding(
     exc: ValidationError,
     factor_name: str | None = None,
 ) -> dict[str, Any]:
-    first_error = exc.errors()[0] if exc.errors() else {"msg": "schema validation failed", "loc": []}
+    first_error: dict[str, Any] = (
+        dict(exc.errors()[0]) if exc.errors() else {"msg": "schema validation failed", "loc": []}
+    )
     return {
         "severity": "high",
         "issue_type": "schema_validation_failed",
@@ -814,7 +913,9 @@ def _build_analysis_events(
             for key in ("day_start", "day_end", "duration_days", "concentration_value", "concentration_unit"):
                 if normalized.get(key) is not None:
                     merged[key] = normalized.get(key)
-        merged["analysis_event_source"] = "normalized_factor_events" if normalized else "filtered_protocol_factor_events"
+        merged["analysis_event_source"] = (
+            "normalized_factor_events" if normalized else "filtered_protocol_factor_events"
+        )
         analysis_events.append(merged)
     return analysis_events
 
@@ -932,7 +1033,13 @@ def _add_temporal_features(
     row["mean_stage_duration"] = _blank_if_none(_mean_stage_duration(stages, events))
     row["max_stage_duration"] = _blank_if_none(_max_stage_duration(stages, events))
     refs = [_stage_ref(stage) for stage in stages] or [_event_ref(event) for event in events[:5]]
-    for feature in ("total_days", "number_of_stages", "stage_transition_number", "mean_stage_duration", "max_stage_duration"):
+    for feature in (
+        "total_days",
+        "number_of_stages",
+        "stage_transition_number",
+        "mean_stage_duration",
+        "max_stage_duration",
+    ):
         provenance[feature] = refs
 
 
@@ -942,7 +1049,9 @@ def _add_action_and_operation_features(
     stages: list[dict[str, Any]],
     provenance: dict[str, list[dict[str, Any]]],
 ) -> None:
-    text_blocks = [_event_text(event) for event in events] + [str(stage.get("key_operations") or "") for stage in stages]
+    text_blocks = [_event_text(event) for event in events] + [
+        str(stage.get("key_operations") or "") for stage in stages
+    ]
     text = " ".join(text_blocks).lower()
     row["num_add_reagent_actions"] = sum(1 for event in events if str(event.get("factor_type") or "") == "reagent")
     row["num_wash_actions"] = _keyword_count(text_blocks, ("wash", "dpbs"))
@@ -956,7 +1065,11 @@ def _add_action_and_operation_features(
     row["has_aggregation"] = int(row["num_aggregation_actions"] > 0)
     row["has_2d_adherent_culture"] = _binary_any(text, ("plate", "coated", "monolayer", "adherent"))
     refs = [_stage_ref(stage) for stage in stages if _has_text(stage.get("key_operations"))]
-    refs.extend(_event_ref(event) for event in events if str(event.get("factor_type") or "") in {"operation", "aggregation", "mechanical_condition"})
+    refs.extend(
+        _event_ref(event)
+        for event in events
+        if str(event.get("factor_type") or "") in {"operation", "aggregation", "mechanical_condition"}
+    )
     refs = refs[:20]
     for feature in (
         "num_add_reagent_actions",
@@ -1099,7 +1212,9 @@ def _add_semantic_strategy_features(
     protocol_id: str,
     provenance: dict[str, list[dict[str, Any]]],
 ) -> None:
-    annotations = [annotation for annotation in semantic_annotations if str(annotation.get("protocol_id") or "") == protocol_id]
+    annotations = [
+        annotation for annotation in semantic_annotations if str(annotation.get("protocol_id") or "") == protocol_id
+    ]
     modules = sorted(
         {
             str(module)
@@ -1115,7 +1230,11 @@ def _add_semantic_strategy_features(
     for module in modules:
         feature = "semantic_module_" + _feature_name(module) + "_presence"
         row[feature] = 1
-        provenance[feature] = [_semantic_ref(annotation) for annotation in annotations if module in (annotation.get("strategy_modules") or [])][:20]
+        provenance[feature] = [
+            _semantic_ref(annotation)
+            for annotation in annotations
+            if module in (annotation.get("strategy_modules") or [])
+        ][:20]
 
 
 def _add_order_features(
@@ -1139,7 +1258,7 @@ def _add_order_features(
             deduped.append(family)
     row["ordered_reagent_program"] = ">".join(deduped)
     provenance["ordered_reagent_program"] = [ref for family in deduped for ref in refs_by_family.get(family, [])]
-    for previous, current in zip(deduped, deduped[1:]):
+    for previous, current in zip(deduped, deduped[1:], strict=False):
         feature = f"transition_{previous}_to_{current}"
         row[feature] = 1
         provenance[feature] = refs_by_family.get(previous, []) + refs_by_family.get(current, [])
@@ -1154,7 +1273,11 @@ def _add_graph_sequence_and_topology_features(
     ordered_events = _ordered_events(events)
     stage_ids = {str(stage.get("stage_id") or "") for stage in stages if stage.get("stage_id")}
     event_stage_ids = {str(event.get("stage_id") or "") for event in events if event.get("stage_id")}
-    reagent_events = [event for event in ordered_events if str(event.get("factor_type") or "") == "reagent" and _feature_name(_factor_name(event))]
+    reagent_events = [
+        event
+        for event in ordered_events
+        if str(event.get("factor_type") or "") == "reagent" and _feature_name(_factor_name(event))
+    ]
     action_labels = [_feature_name(_operation_label(event)) for event in ordered_events]
     factor_types = [_feature_name(str(event.get("factor_type") or "unknown")) for event in ordered_events]
 
@@ -1164,8 +1287,12 @@ def _add_graph_sequence_and_topology_features(
     row["graph_n_event_edges"] = len(ordered_events)
     row["graph_n_next_action_edges"] = max(len(ordered_events) - 1, 0)
     row["graph_n_next_stage_edges"] = max(row["graph_n_stage_nodes"] - 1, 0)
-    row["graph_mean_actions_per_stage"] = round(len(ordered_events) / row["graph_n_stage_nodes"], 3) if row["graph_n_stage_nodes"] else 0
-    row["graph_max_actions_per_stage"] = max(Counter(str(event.get("stage_id") or "") for event in ordered_events).values() or [0])
+    row["graph_mean_actions_per_stage"] = (
+        round(len(ordered_events) / row["graph_n_stage_nodes"], 3) if row["graph_n_stage_nodes"] else 0
+    )
+    row["graph_max_actions_per_stage"] = max(
+        Counter(str(event.get("stage_id") or "") for event in ordered_events).values() or [0]
+    )
     refs = [_event_ref(event) for event in ordered_events]
     for feature in (
         "graph_n_stage_nodes",
@@ -1179,14 +1306,14 @@ def _add_graph_sequence_and_topology_features(
     ):
         provenance[feature] = refs or [_stage_ref(stage) for stage in stages]
 
-    for previous, current in zip(action_labels, action_labels[1:]):
+    for previous, current in zip(action_labels, action_labels[1:], strict=False):
         if not previous or not current:
             continue
         feature = f"action_bigram_{previous}_to_{current}"
         row[feature] = row.get(feature, 0) + 1
     _attach_adjacent_pair_provenance("action_bigram", action_labels, ordered_events, provenance)
 
-    for previous, current in zip(factor_types, factor_types[1:]):
+    for previous, current in zip(factor_types, factor_types[1:], strict=False):
         if not previous or not current:
             continue
         feature = f"factor_type_bigram_{previous}_to_{current}"
@@ -1194,7 +1321,7 @@ def _add_graph_sequence_and_topology_features(
     _attach_adjacent_pair_provenance("factor_type_bigram", factor_types, ordered_events, provenance)
 
     reagent_labels = [_feature_name(_factor_name(event)) for event in reagent_events]
-    for previous, current in zip(reagent_labels, reagent_labels[1:]):
+    for previous, current in zip(reagent_labels, reagent_labels[1:], strict=False):
         if not previous or not current:
             continue
         feature = f"all_reagent_transition_{previous}_to_{current}"
@@ -1235,7 +1362,7 @@ def _attach_adjacent_pair_provenance(
     events: list[dict[str, Any]],
     provenance: dict[str, list[dict[str, Any]]],
 ) -> None:
-    for index, (previous, current) in enumerate(zip(labels, labels[1:])):
+    for index, (previous, current) in enumerate(zip(labels, labels[1:], strict=False)):
         if not previous or not current:
             continue
         feature = f"{prefix}_{previous}_to_{current}"
@@ -1248,13 +1375,21 @@ def _add_dependency_features(
     stages: list[dict[str, Any]],
     provenance: dict[str, list[dict[str, Any]]],
 ) -> None:
-    text = " ".join([_event_text(event) for event in events] + [str(stage.get("key_operations") or "") for stage in stages]).lower()
+    text = " ".join(
+        [_event_text(event) for event in events] + [str(stage.get("key_operations") or "") for stage in stages]
+    ).lower()
     row["requires_previous_stage_completion"] = _binary_any(text, ("after ", "following ", "on stage", "during stage"))
     row["requires_cell_dissociation"] = _binary_any(text, ("dissociat", "accutase", "trypsin"))
-    row["requires_cell_number_threshold"] = _binary_any(text, ("cells/cm", "cells per", "x10", "×10", "cell density", "seeded at"))
+    row["requires_cell_number_threshold"] = _binary_any(
+        text, ("cells/cm", "cells per", "x10", "×10", "cell density", "seeded at")
+    )
     refs = [_stage_ref(stage) for stage in stages if _has_text(stage.get("key_operations"))]
     refs.extend(_event_ref(event) for event in events[:10])
-    for feature in ("requires_previous_stage_completion", "requires_cell_dissociation", "requires_cell_number_threshold"):
+    for feature in (
+        "requires_previous_stage_completion",
+        "requires_cell_dissociation",
+        "requires_cell_number_threshold",
+    ):
         provenance[feature] = refs[:20]
 
 
@@ -1265,7 +1400,12 @@ def _build_protocol_relationships(feature_rows: list[dict[str, Any]]) -> tuple[l
         key
         for key in feature_rows[0]
         if key not in _metadata_columns()
-        and (key.startswith("has_") or key.endswith("_presence") or key.startswith("transition_") or key.startswith("requires_"))
+        and (
+            key.startswith("has_")
+            or key.endswith("_presence")
+            or key.startswith("transition_")
+            or key.startswith("requires_")
+        )
     ]
     rows: list[dict[str, Any]] = []
     pair_reports: list[dict[str, Any]] = []
@@ -1319,9 +1459,7 @@ def _build_quantification_coverage_report(
         if feature_key:
             reagent_labels_by_feature[feature_key].add(label)
     reagent_name_collisions = {
-        feature_key: sorted(labels)
-        for feature_key, labels in reagent_labels_by_feature.items()
-        if len(labels) > 1
+        feature_key: sorted(labels) for feature_key, labels in reagent_labels_by_feature.items() if len(labels) > 1
     }
     factor_types = sorted(
         {
@@ -1331,11 +1469,7 @@ def _build_quantification_coverage_report(
         }
     )
     action_categories = sorted(
-        {
-            category
-            for event in events
-            for category in _action_categories_for_text(_event_text(event), event)
-        }
+        {category for event in events for category in _action_categories_for_text(_event_text(event), event)}
     )
     action_relevant_events = [
         event
@@ -1354,9 +1488,7 @@ def _build_quantification_coverage_report(
         for event in action_relevant_events
         if not _action_categories_for_text(_event_text(event), event)
     ]
-    missing_reagents = [
-        name for name in reagent_names if f"all_reagent_{name}_presence" not in matrix_columns
-    ]
+    missing_reagents = [name for name in reagent_names if f"all_reagent_{name}_presence" not in matrix_columns]
     missing_factor_types = [
         factor_type for factor_type in factor_types if f"factor_type_{factor_type}_presence" not in matrix_columns
     ]
@@ -1370,7 +1502,17 @@ def _build_quantification_coverage_report(
         if column.startswith(("all_reagent_", "factor_type_", "action_category_"))
         and not any(column in protocol_provenance for protocol_provenance in provenance_protocols.values())
     )
-    status = "pass" if not (missing_reagents or missing_factor_types or missing_action_categories or missing_provenance_columns or uncategorized_action_events) else "fail"
+    status = (
+        "pass"
+        if not (
+            missing_reagents
+            or missing_factor_types
+            or missing_action_categories
+            or missing_provenance_columns
+            or uncategorized_action_events
+        )
+        else "fail"
+    )
     return {
         "status": status,
         "scope": "accepted_filtered_analysis_events_only",
@@ -1379,18 +1521,24 @@ def _build_quantification_coverage_report(
         "n_matrix_columns": len(matrix_columns),
         "reagent_coverage": {
             "n_unique_reagents": len(reagent_names),
-            "n_presence_columns": sum(1 for column in matrix_columns if column.startswith("all_reagent_") and column.endswith("_presence")),
+            "n_presence_columns": sum(
+                1 for column in matrix_columns if column.startswith("all_reagent_") and column.endswith("_presence")
+            ),
             "missing_reagents": missing_reagents,
             "reagent_name_collisions": reagent_name_collisions,
         },
         "factor_type_coverage": {
             "n_unique_factor_types": len(factor_types),
-            "n_presence_columns": sum(1 for column in matrix_columns if column.startswith("factor_type_") and column.endswith("_presence")),
+            "n_presence_columns": sum(
+                1 for column in matrix_columns if column.startswith("factor_type_") and column.endswith("_presence")
+            ),
             "missing_factor_types": missing_factor_types,
         },
         "action_category_coverage": {
             "n_unique_action_categories": len(action_categories),
-            "n_presence_columns": sum(1 for column in matrix_columns if column.startswith("action_category_") and column.endswith("_presence")),
+            "n_presence_columns": sum(
+                1 for column in matrix_columns if column.startswith("action_category_") and column.endswith("_presence")
+            ),
             "n_action_relevant_events": len(action_relevant_events),
             "n_uncategorized_action_events": len(uncategorized_action_events),
             "missing_action_categories": missing_action_categories,
@@ -1421,12 +1569,44 @@ def _build_predefined_quantification_registry(events: list[dict[str, Any]]) -> d
         base = f"all_reagent_{reagent_key}"
         features.extend(
             [
-                _predefined_feature(base, "presence", "binary", "reagent_identity", f"1 if reagent `{reagent_key}` appears in accepted factor events."),
-                _predefined_feature(base, "n_events", "count", "reagent_identity", f"Count of accepted events for reagent `{reagent_key}`."),
-                _predefined_feature(base, "total_exposure", "numeric_sum", "reagent_timing", f"Sum of exposure duration for reagent `{reagent_key}` when day_start/day_end are available."),
-                _predefined_feature(base, "start_day", "numeric_min", "reagent_timing", f"Earliest day_start for reagent `{reagent_key}`."),
-                _predefined_feature(base, "end_day", "numeric_max", "reagent_timing", f"Latest day_end for reagent `{reagent_key}`."),
-                _predefined_feature(base, "max_concentration", "numeric_max", "reagent_dose", f"Maximum parsed concentration_value for reagent `{reagent_key}`."),
+                _predefined_feature(
+                    base,
+                    "presence",
+                    "binary",
+                    "reagent_identity",
+                    f"1 if reagent `{reagent_key}` appears in accepted factor events.",
+                ),
+                _predefined_feature(
+                    base,
+                    "n_events",
+                    "count",
+                    "reagent_identity",
+                    f"Count of accepted events for reagent `{reagent_key}`.",
+                ),
+                _predefined_feature(
+                    base,
+                    "total_exposure",
+                    "numeric_sum",
+                    "reagent_timing",
+                    f"Sum of exposure duration for reagent `{reagent_key}` when day_start/day_end are available.",
+                ),
+                _predefined_feature(
+                    base,
+                    "start_day",
+                    "numeric_min",
+                    "reagent_timing",
+                    f"Earliest day_start for reagent `{reagent_key}`.",
+                ),
+                _predefined_feature(
+                    base, "end_day", "numeric_max", "reagent_timing", f"Latest day_end for reagent `{reagent_key}`."
+                ),
+                _predefined_feature(
+                    base,
+                    "max_concentration",
+                    "numeric_max",
+                    "reagent_dose",
+                    f"Maximum parsed concentration_value for reagent `{reagent_key}`.",
+                ),
             ]
         )
         for feature in features[-6:]:
@@ -1437,10 +1617,34 @@ def _build_predefined_quantification_registry(events: list[dict[str, Any]]) -> d
         base = f"factor_type_{factor_type}"
         features.extend(
             [
-                _predefined_feature(base, "presence", "binary", "factor_type_coverage", f"1 if accepted events include factor_type `{factor_type}`."),
-                _predefined_feature(base, "n_events", "count", "factor_type_coverage", f"Count of accepted events with factor_type `{factor_type}`."),
-                _predefined_feature(base, "start_day", "numeric_min", "factor_type_timing", f"Earliest day_start for factor_type `{factor_type}`."),
-                _predefined_feature(base, "end_day", "numeric_max", "factor_type_timing", f"Latest day_end for factor_type `{factor_type}`."),
+                _predefined_feature(
+                    base,
+                    "presence",
+                    "binary",
+                    "factor_type_coverage",
+                    f"1 if accepted events include factor_type `{factor_type}`.",
+                ),
+                _predefined_feature(
+                    base,
+                    "n_events",
+                    "count",
+                    "factor_type_coverage",
+                    f"Count of accepted events with factor_type `{factor_type}`.",
+                ),
+                _predefined_feature(
+                    base,
+                    "start_day",
+                    "numeric_min",
+                    "factor_type_timing",
+                    f"Earliest day_start for factor_type `{factor_type}`.",
+                ),
+                _predefined_feature(
+                    base,
+                    "end_day",
+                    "numeric_max",
+                    "factor_type_timing",
+                    f"Latest day_end for factor_type `{factor_type}`.",
+                ),
             ]
         )
         for feature in features[-4:]:
@@ -1450,9 +1654,27 @@ def _build_predefined_quantification_registry(events: list[dict[str, Any]]) -> d
         base = f"action_category_{category}"
         features.extend(
             [
-                _predefined_feature(base, "presence", "binary", "action_category_coverage", f"1 if accepted events or stage operations match action category `{category}`."),
-                _predefined_feature(base, "n_events", "count", "action_category_coverage", f"Count of accepted events matching action category `{category}`."),
-                _predefined_feature(base, "n_stage_mentions", "count", "action_category_coverage", f"Count of accepted stage operation summaries matching action category `{category}`."),
+                _predefined_feature(
+                    base,
+                    "presence",
+                    "binary",
+                    "action_category_coverage",
+                    f"1 if accepted events or stage operations match action category `{category}`.",
+                ),
+                _predefined_feature(
+                    base,
+                    "n_events",
+                    "count",
+                    "action_category_coverage",
+                    f"Count of accepted events matching action category `{category}`.",
+                ),
+                _predefined_feature(
+                    base,
+                    "n_stage_mentions",
+                    "count",
+                    "action_category_coverage",
+                    f"Count of accepted stage operation summaries matching action category `{category}`.",
+                ),
             ]
         )
         for feature in features[-3:]:
@@ -1467,7 +1689,14 @@ def _build_predefined_quantification_registry(events: list[dict[str, Any]]) -> d
                 "name": "all_reagent",
                 "description": "One predefined feature group for every reagent identity observed in accepted reagent events.",
                 "n_entities": len(reagent_labels_by_feature),
-                "features_per_entity": ["presence", "n_events", "total_exposure", "start_day", "end_day", "max_concentration"],
+                "features_per_entity": [
+                    "presence",
+                    "n_events",
+                    "total_exposure",
+                    "start_day",
+                    "end_day",
+                    "max_concentration",
+                ],
             },
             {
                 "name": "factor_type",
@@ -1542,7 +1771,9 @@ def _build_protocol_workflow_graphs(
             "source_identity_status": source_by_protocol.get(protocol_id, {}).get("source_identity_status", ""),
         }
 
-        sorted_stages = sorted(record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999)
+        sorted_stages = sorted(
+            record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999
+        )
         for stage in sorted_stages:
             stage_id = str(stage.get("stage_id") or "")
             if not stage_id:
@@ -1571,7 +1802,7 @@ def _build_protocol_workflow_graphs(
                     "evidence_quote": stage.get("evidence_quote"),
                 }
                 edges.append({"source": stage_id, "target": action_id, "type": "has_action"})
-        for previous, current in zip(sorted_stages, sorted_stages[1:]):
+        for previous, current in zip(sorted_stages, sorted_stages[1:], strict=False):
             if previous.get("stage_id") and current.get("stage_id"):
                 edges.append({"source": previous["stage_id"], "target": current["stage_id"], "type": "next_stage"})
 
@@ -1595,7 +1826,9 @@ def _build_protocol_workflow_graphs(
                 "day_end": event.get("day_end"),
                 "evidence_quote": event.get("evidence_quote"),
             }
-            edges.append({"source": stage_id if stage_id in nodes else protocol_id, "target": action_id, "type": "has_action"})
+            edges.append(
+                {"source": stage_id if stage_id in nodes else protocol_id, "target": action_id, "type": "has_action"}
+            )
             if factor_name:
                 reagent_id = f"reagent:{_feature_name(factor_name)}"
                 nodes[reagent_id] = {
@@ -1620,7 +1853,7 @@ def _build_protocol_workflow_graphs(
                         "day_end": event.get("day_end"),
                     }
                 )
-        for previous, current in zip(action_ids_in_order, action_ids_in_order[1:]):
+        for previous, current in zip(action_ids_in_order, action_ids_in_order[1:], strict=False):
             edges.append({"source": previous, "target": current, "type": "next_action"})
 
         graphs[protocol_id] = {
@@ -1653,18 +1886,24 @@ def _build_protocol_knowledge_graph(
         if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
             continue
         paper_id = str(record.get("paper_id") or protocol.get("paper_id") or "")
-        nodes[protocol_id] = {"id": protocol_id, "type": "protocol", "label": protocol.get("protocol_name") or protocol_id}
+        nodes[protocol_id] = {
+            "id": protocol_id,
+            "type": "protocol",
+            "label": protocol.get("protocol_name") or protocol_id,
+        }
         if paper_id:
             nodes[paper_id] = {"id": paper_id, "type": "paper", "label": paper_id}
             edges.append({"source": protocol_id, "target": paper_id, "type": "derived_from_paper"})
-        sorted_stages = sorted(record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999)
+        sorted_stages = sorted(
+            record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999
+        )
         for stage in sorted_stages:
             stage_id = str(stage.get("stage_id") or "")
             if not stage_id:
                 continue
             nodes[stage_id] = {"id": stage_id, "type": "stage", "label": stage.get("stage_name") or stage_id}
             edges.append({"source": protocol_id, "target": stage_id, "type": "has_stage"})
-        for previous, current in zip(sorted_stages, sorted_stages[1:]):
+        for previous, current in zip(sorted_stages, sorted_stages[1:], strict=False):
             if previous.get("stage_id") and current.get("stage_id"):
                 edges.append({"source": previous["stage_id"], "target": current["stage_id"], "type": "next_stage"})
 
@@ -1727,13 +1966,19 @@ def _build_protocol_knowledge_graph(
         source_id = check.get("canonical_source_id") or check.get("source_file")
         protocol_id = check.get("protocol_id")
         if source_id and protocol_id:
-            nodes[source_id] = {"id": source_id, "type": "source", "label": check.get("canonical_filename") or source_id}
+            nodes[source_id] = {
+                "id": source_id,
+                "type": "source",
+                "label": check.get("canonical_filename") or source_id,
+            }
             edges.append({"source": protocol_id, "target": source_id, "type": "mapped_to_source"})
 
     return {"nodes": list(nodes.values()), "edges": edges, "summary": {"n_nodes": len(nodes), "n_edges": len(edges)}}
 
 
-def _build_protocol_embeddings_and_clusters(feature_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _build_protocol_embeddings_and_clusters(
+    feature_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     numeric_keys = _numeric_feature_keys(feature_rows)
     normalized = _normalized_numeric_features(feature_rows, numeric_keys)
     embeddings: list[dict[str, Any]] = []
@@ -1741,7 +1986,9 @@ def _build_protocol_embeddings_and_clusters(feature_rows: list[dict[str, Any]]) 
     for row in feature_rows:
         protocol_id = row["protocol_id"]
         values = normalized.get(protocol_id, {})
-        reagent_presence_keys = [key for key in numeric_keys if key.endswith("_presence") and _safe_float(row.get(key), 0.0)]
+        reagent_presence_keys = [
+            key for key in numeric_keys if key.endswith("_presence") and _safe_float(row.get(key), 0.0)
+        ]
         workflow_keys = [key for key in numeric_keys if key.startswith("has_") and _safe_float(row.get(key), 0.0)]
         embedding_1 = round(sum(values.get(key, 0.0) for key in reagent_presence_keys), 6)
         embedding_2 = round(sum(values.get(key, 0.0) for key in workflow_keys), 6)
@@ -1781,9 +2028,13 @@ def _build_standardized_protocol_representations(
         if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
             continue
         stage_representations = []
-        for stage in sorted(record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999):
+        for stage in sorted(
+            record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999
+        ):
             stage_id = str(stage.get("stage_id") or "")
-            stage_events = [event for event in by_protocol.get(protocol_id, []) if str(event.get("stage_id") or "") == stage_id]
+            stage_events = [
+                event for event in by_protocol.get(protocol_id, []) if str(event.get("stage_id") or "") == stage_id
+            ]
             stage_representations.append(
                 {
                     "stage_id": stage_id,
@@ -1822,7 +2073,7 @@ def _build_source_identity_report(
         by_paper[str(row.get("canonical_paper_id") or row.get("guessed_paper_key") or "")].append(row)
 
     checks: list[dict[str, Any]] = []
-    status_counts = Counter()
+    status_counts: Counter[str] = Counter()
     for record in protocol_records:
         protocol = record.get("protocol") or {}
         protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
@@ -1830,7 +2081,9 @@ def _build_source_identity_report(
         source_file = str(record.get("source_doc_id") or protocol.get("source_file") or "")
         candidates = by_paper.get(paper_id, [])
         matched = _best_source_match(source_file, candidates)
-        status = "matched" if matched else ("paper_id_not_in_inventory" if not candidates else "source_file_not_matched")
+        status = (
+            "matched" if matched else ("paper_id_not_in_inventory" if not candidates else "source_file_not_matched")
+        )
         status_counts[status] += 1
         checks.append(
             {
@@ -2036,12 +2289,13 @@ def _numeric_feature_keys(feature_rows: list[dict[str, Any]]) -> list[str]:
     return keys
 
 
-def _normalized_numeric_features(feature_rows: list[dict[str, Any]], numeric_keys: list[str]) -> dict[str, dict[str, float]]:
+def _normalized_numeric_features(
+    feature_rows: list[dict[str, Any]], numeric_keys: list[str]
+) -> dict[str, dict[str, float]]:
     mins: dict[str, float] = {}
     maxs: dict[str, float] = {}
     for key in numeric_keys:
-        values = [_safe_float(row.get(key), None) for row in feature_rows]
-        values = [value for value in values if value is not None]
+        values = [value for row in feature_rows if (value := _safe_float(row.get(key), None)) is not None]
         if values:
             mins[key] = min(values)
             maxs[key] = max(values)
@@ -2076,7 +2330,10 @@ def _assign_protocol_cluster(row: dict[str, Any]) -> str:
         "heparin_presence",
     )
     has_maturation = any(_truthy_feature(row.get(feature)) for feature in maturation_markers)
-    has_patterning = any(_truthy_feature(row.get(feature)) for feature in ("activin_presence", "chir_presence", "kgf_presence", "ra_presence"))
+    has_patterning = any(
+        _truthy_feature(row.get(feature))
+        for feature in ("activin_presence", "chir_presence", "kgf_presence", "ra_presence")
+    )
     if has_maturation and has_patterning:
         strategy = "patterning_plus_maturation"
     elif has_patterning:
@@ -2115,7 +2372,10 @@ def _protocol_confidence_score(record: dict[str, Any]) -> float:
     if isinstance(confidence, (int, float)):
         return float(confidence)
     if isinstance(confidence, dict):
-        return max(_confidence_label_score(confidence.get("extraction")), _confidence_label_score(protocol.get("confidence_level")))
+        return max(
+            _confidence_label_score(confidence.get("extraction")),
+            _confidence_label_score(protocol.get("confidence_level")),
+        )
     return _confidence_label_score(protocol.get("confidence_level"), default=1.0)
 
 
@@ -2149,9 +2409,10 @@ def _validation_flag_names(value: Any) -> set[str]:
 
 
 def _has_unparsed_numeric_field(event: dict[str, Any]) -> bool:
-    return str(event.get("parse_status") or "").lower() == "unparsed" or str(
-        event.get("concentration_parse_status") or ""
-    ).lower() == "unparsed"
+    return (
+        str(event.get("parse_status") or "").lower() == "unparsed"
+        or str(event.get("concentration_parse_status") or "").lower() == "unparsed"
+    )
 
 
 def _factor_name(event: dict[str, Any]) -> str:
@@ -2169,18 +2430,40 @@ def _factor_name(event: dict[str, Any]) -> str:
 def _factor_search_text(event: dict[str, Any]) -> str:
     return " ".join(
         str(event.get(key) or "")
-        for key in ("normalized_name", "normalized_family", "standardized_name", "factor_name", "value_raw", "concentration_raw", "timing", "operation")
+        for key in (
+            "normalized_name",
+            "normalized_family",
+            "standardized_name",
+            "factor_name",
+            "value_raw",
+            "concentration_raw",
+            "timing",
+            "operation",
+        )
     ).lower()
 
 
 def _factor_identity_text(event: dict[str, Any]) -> str:
-    return " ".join(str(event.get(key) or "") for key in ("normalized_name", "normalized_family", "standardized_name", "factor_name")).lower()
+    return " ".join(
+        str(event.get(key) or "")
+        for key in ("normalized_name", "normalized_family", "standardized_name", "factor_name")
+    ).lower()
 
 
 def _event_text(event: dict[str, Any]) -> str:
     return " ".join(
         str(event.get(key) or "")
-        for key in ("factor_type", "action_type", "factor_name", "standardized_name", "normalized_name", "normalized_family", "operation", "timing", "value_raw")
+        for key in (
+            "factor_type",
+            "action_type",
+            "factor_name",
+            "standardized_name",
+            "normalized_name",
+            "normalized_family",
+            "operation",
+            "timing",
+            "value_raw",
+        )
     )
 
 
@@ -2222,7 +2505,9 @@ def _total_days(protocol: dict[str, Any], stages: list[dict[str, Any]], events: 
     from_protocol = _safe_float(protocol.get("total_duration_days"), None)
     if from_protocol is not None:
         return from_protocol
-    ends = [_safe_float(stage.get("day_end"), None) for stage in stages] + [_safe_float(event.get("day_end"), None) for event in events]
+    ends = [_safe_float(stage.get("day_end"), None) for stage in stages] + [
+        _safe_float(event.get("day_end"), None) for event in events
+    ]
     values = [value for value in ends if value is not None]
     return max(values) if values else None
 
@@ -2290,14 +2575,12 @@ def _first_non_empty(rows: list[dict[str, Any]], key: str) -> Any:
 
 
 def _min_numeric(rows: list[dict[str, Any]], key: str) -> float | None:
-    values = [_safe_float(row.get(key), None) for row in rows]
-    values = [value for value in values if value is not None]
+    values = [value for row in rows if (value := _safe_float(row.get(key), None)) is not None]
     return min(values) if values else None
 
 
 def _max_numeric(rows: list[dict[str, Any]], key: str) -> float | None:
-    values = [_safe_float(row.get(key), None) for row in rows]
-    values = [value for value in values if value is not None]
+    values = [value for row in rows if (value := _safe_float(row.get(key), None)) is not None]
     return max(values) if values else None
 
 

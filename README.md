@@ -47,7 +47,7 @@ load_protocol_artifacts
 load_h5ad_manifest
 analyze_protocol_factors
 analyze_h5ad_profiles
-integrate_protocol_and_h5ad_results
+optimize_protocol_from_agent_outputs
 generate_improved_protocol
 qc_final_recommendations
 export_results
@@ -57,7 +57,9 @@ Core agents:
 
 - `ProtocolAnalysisAgent`: reads Agent1 evidence-grounded artifacts and summarizes protocol / stage / factor differences.
 - `DataAnalysisAgent`: reads the h5ad manifest and runs pluggable data analysis tools. The initial implementation emits manifest-based structured placeholders when h5ad dependencies or input files are unavailable.
-- `IntegrationOptimizationAgent`: integrates protocol variables and single-cell phenotype summaries into evidence-labeled protocol recommendations.
+- `ProtocolOptimizingAgent`: integrates protocol variables and single-cell phenotype summaries into evidence-labeled optimization hypotheses and protocol recommendations.
+
+Optimization orchestration is explicit: `ProtocolOptimizingAgent` consumes audited Protocol/Data Agent outputs. If protocol or data inputs need reinterpretation, rerun the corresponding upstream agent first; the Orchestrator reports `upstream_rerun_required` instead of optimizing from incomplete PA/DA outputs.
 
 ## LangGraph Workflow
 

@@ -10,16 +10,28 @@ from protocol_optimization_agent.llm_client import build_llm_client
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run only the Protocol Analysis Agent.")
-    parser.add_argument("--input-dir", default="inputs/Protocols inputs", help="Directory containing Agent1 protocol outputs.")
-    parser.add_argument("--output-dir", default="runs/protocol_analysis_agent_run", help="Directory for protocol analysis outputs.")
+    parser.add_argument(
+        "--input-dir", default="inputs/Protocols inputs", help="Directory containing Agent1 protocol outputs."
+    )
+    parser.add_argument(
+        "--output-dir", default="runs/protocol_analysis_agent_run", help="Directory for protocol analysis outputs."
+    )
     parser.add_argument("--min-confidence", type=float, default=0.65)
-    parser.add_argument("--allow-flagged-events", action="store_true", help="Also keep factor events with validation_status=has_flags.")
-    parser.add_argument("--allow-schema-invalid-events", action="store_true", help="Retain schema-invalid factor events with schema_status=accepted_with_schema_findings.")
+    parser.add_argument(
+        "--allow-flagged-events", action="store_true", help="Also keep factor events with validation_status=has_flags."
+    )
+    parser.add_argument(
+        "--allow-schema-invalid-events",
+        action="store_true",
+        help="Retain schema-invalid factor events with schema_status=accepted_with_schema_findings.",
+    )
     parser.add_argument("--base-feature-registry-path", default="configs/base_feature_registry.json")
     parser.add_argument("--approved-feature-registry-path", default="configs/approved_feature_registry.json")
     parser.add_argument("--run-specific-feature-registry-path", default="")
     parser.add_argument("--max-llm-feature-discovery-protocols", type=int, default=0)
-    parser.add_argument("--llm-provider", default="offline", choices=["offline", "openai", "openai_compatible", "deepseek"])
+    parser.add_argument(
+        "--llm-provider", default="offline", choices=["offline", "openai", "openai_compatible", "deepseek"]
+    )
     parser.add_argument("--llm-model", default="")
     parser.add_argument("--llm-api-key-env", default="OPENAI_API_KEY")
     parser.add_argument("--llm-base-url", default="https://api.openai.com/v1")

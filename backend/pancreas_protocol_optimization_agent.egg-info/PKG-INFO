@@ -5,6 +5,7 @@ Summary: ProtocolOptimizationAgent framework for integrating Agent1 protocol art
 Requires-Python: >=3.10
 Requires-Dist: fastapi>=0.110
 Requires-Dist: langchain-core>=0.3
+Requires-Dist: langchain-openai>=0.3
 Requires-Dist: langgraph>=0.2
 Requires-Dist: pydantic>=2.0
 Requires-Dist: uvicorn>=0.27
@@ -12,7 +13,21 @@ Provides-Extra: h5ad
 Requires-Dist: anndata>=0.10; extra == "h5ad"
 Requires-Dist: scanpy>=1.10; extra == "h5ad"
 Requires-Dist: pandas>=2.0; extra == "h5ad"
+Provides-Extra: data-analysis-tools
+Requires-Dist: anndata>=0.10; extra == "data-analysis-tools"
+Requires-Dist: celloracle>=0.18; extra == "data-analysis-tools"
+Requires-Dist: cellrank>=2.0; extra == "data-analysis-tools"
+Requires-Dist: celltypist>=1.6; extra == "data-analysis-tools"
+Requires-Dist: gseapy>=1.0; extra == "data-analysis-tools"
+Requires-Dist: pandas>=2.0; extra == "data-analysis-tools"
+Requires-Dist: pyscenic>=0.12; extra == "data-analysis-tools"
+Requires-Dist: scanpy>=1.10; extra == "data-analysis-tools"
+Requires-Dist: scib-metrics>=0.5; extra == "data-analysis-tools"
+Requires-Dist: scvelo>=0.3; extra == "data-analysis-tools"
+Requires-Dist: scvi-tools>=1.0; extra == "data-analysis-tools"
 Provides-Extra: dev
 Requires-Dist: ipython>=8.0; extra == "dev"
 Requires-Dist: langgraph-cli[inmem]>=0.3; extra == "dev"
+Requires-Dist: mypy>=1.14; extra == "dev"
 Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: ruff>=0.8; extra == "dev"

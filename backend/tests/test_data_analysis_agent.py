@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import csv
+import builtins
 import json
 from pathlib import Path
 
+import pytest
+
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
+from protocol_optimization_agent.tools.h5ad_tools import query_gene_expression
+from protocol_optimization_agent.tools.external_data_tools import get_external_data_analysis_tools
 
 
 def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
+    (tmp_path / "external_tools" / "data_analysis" / "scanpy").mkdir(parents=True)
     manifest_rows = [
         {
             "protocol_id": "p1",
@@ -34,6 +40,7 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
         h5ad_config={"reference_dataset_id": "atlas_vivo"},
         reference_atlas_path=tmp_path / "missing_reference.h5ad",
         gene_programs=gene_programs,
+        project_root=tmp_path,
     ).run(manifest_rows)
 
     expected = {
@@ -45,11 +52,13 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
         "gene_program_scores",
         "regulatory_program_scores",
         "trajectory_scores",
+        "external_tool_inventory",
         "data_analysis_protocol_summary",
         "h5ad_qc_report",
         "h5ad_analysis_limitations",
         "data_analysis_tool_registry",
         "data_analysis_comparison_report",
+        "data_analysis_query_result",
     }
     assert expected.issubset(outputs)
     assert all(path.exists() for path in outputs.values())
@@ -74,6 +83,8 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
     assert comparison["schema_version"] == "data-analysis-comparison-report-v1"
     assert "organoid_reference_similarity" in comparison["comparison_axes"]
     assert any(tool["tool_id"] == "gene_program_maturity_score" for tool in comparison["tool_registry"])
+    assert "scanpy_h5ad_profile_tool" in comparison["callable_tools"]
+    assert any(tool["tool_id"] == "scanpy_h5ad_profile_tool" for tool in comparison["external_tool_inventory"])
 
     qc_report = json.loads(outputs["h5ad_qc_report"].read_text(encoding="utf-8"))
     assert qc_report["input_gate_report"]["summary"]["n_gene_program_lineages"] == 2
@@ -82,3 +93,141 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
         "dataset_inventory_builder",
         "metadata_and_qc_summary",
     ]
+
+    external_rows = list(csv.DictReader(outputs["external_tool_inventory"].open(encoding="utf-8")))
+    scanpy_row = next(row for row in external_rows if row["tool_id"] == "scanpy_h5ad_profile_tool")
+    assert scanpy_row["source_downloaded"] == "True"
+
+    agent = DataAnalysisAgent(output_dir=tmp_path, project_root=tmp_path)
+    call_result = agent.call_tool("scanpy_h5ad_profile_tool")
+    assert call_result["tool_id"] == "scanpy_h5ad_profile_tool"
+    assert call_result["source_downloaded"] is True
+
+
+def test_external_data_analysis_tools_are_callable(tmp_path: Path) -> None:
+    tools = get_external_data_analysis_tools(tmp_path)
+
+    assert "scanpy_h5ad_profile_tool" in tools
+    result = tools["scanpy_h5ad_profile_tool"]({"project_root": str(tmp_path)})
+    assert result["tool_id"] == "scanpy_h5ad_profile_tool"
+    assert result["status"] == "callable_wrapper_ready_numeric_execution_pending"
+
+
+def test_data_analysis_agent_runs_small_h5ad_analysis(tmp_path: Path) -> None:
+    adata_path = _write_synthetic_h5ad(tmp_path)
+    outputs = DataAnalysisAgent(
+        output_dir=tmp_path / "out",
+        h5ad_config={
+            "annotation_cell_type_column": "cell_type",
+            "batch_column": "batch",
+            "lineage_column": "lineage",
+            "marker_sets": {"beta_marker": ["INS", "IAPP"]},
+            "query_genes": ["INS", "SOX9", "NOT_A_GENE"],
+            "expression_groupby": "cell_type",
+            "differential_expression": {
+                "groupby": "cell_type",
+                "group_a": "beta",
+                "group_b": "alpha",
+                "genes": ["INS", "GCG"],
+            },
+            "backed": False,
+        },
+    ).run(
+        [
+            {
+                "protocol_id": "p1",
+                "dataset_id": "d1",
+                "sample_id": "s1",
+                "condition_id": "baseline",
+                "h5ad_path": str(adata_path),
+            }
+        ]
+    )
+
+    composition_rows = list(csv.DictReader(outputs["cell_type_composition"].open(encoding="utf-8")))
+    beta = next(row for row in composition_rows if row["cell_type"] == "beta")
+    assert beta["n_cells"] == "3"
+    assert beta["status"] == "ok"
+
+    expression_rows = list(csv.DictReader(outputs["gene_expression_summary"].open(encoding="utf-8")))
+    beta_ins = next(row for row in expression_rows if row["gene"] == "INS" and row["group"] == "beta")
+    assert float(beta_ins["mean_expression"]) > 4
+    assert any(row["gene"] == "NOT_A_GENE" and row["status"] == "gene_not_found" for row in expression_rows)
+
+    marker_rows = list(csv.DictReader(outputs["marker_scores"].open(encoding="utf-8")))
+    assert any(row["marker_set"] == "beta_marker" and row["status"] == "ok" for row in marker_rows)
+
+    de_rows = list(csv.DictReader(outputs["differential_expression"].open(encoding="utf-8")))
+    ins_de = next(row for row in de_rows if row["gene"] == "INS")
+    assert float(ins_de["mean_a"]) > float(ins_de["mean_b"])
+    assert ins_de["status"] == "ok"
+
+    qc_report = json.loads(outputs["h5ad_qc_report"].read_text(encoding="utf-8"))
+    assert qc_report["qc_rows"][0]["analysis_status"] == "ok"
+    query_contract = json.loads(outputs["data_analysis_query_result"].read_text(encoding="utf-8"))
+    assert "differential_expression" in query_contract["supported_operations"]
+
+
+def test_gene_expression_reports_missing_obs_column(tmp_path: Path) -> None:
+    adata_path = _write_synthetic_h5ad(tmp_path)
+    rows = query_gene_expression(
+        {
+            "protocol_id": "p1",
+            "dataset_id": "d1",
+            "h5ad_path": str(adata_path),
+        },
+        {},
+        ["INS"],
+        groupby="missing_column",
+    )
+
+    assert rows[0]["status"] == "obs_column_missing"
+    assert rows[0]["obs_column"] == "missing_column"
+
+
+def test_gene_expression_dependency_missing_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "anndata":
+            raise ImportError("synthetic missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    rows = query_gene_expression(
+        {"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": "missing.h5ad"},
+        {},
+        ["INS"],
+    )
+
+    assert rows[0]["status"] == "dependency_missing"
+
+
+def _write_synthetic_h5ad(tmp_path: Path) -> Path:
+    ad = pytest.importorskip("anndata")
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+
+    x = np.array(
+        [
+            [5.0, 4.0, 0.0, 0.0],
+            [6.0, 5.0, 0.0, 0.0],
+            [5.5, 4.5, 0.0, 1.0],
+            [0.1, 0.0, 7.0, 0.0],
+            [0.0, 0.0, 8.0, 0.0],
+            [0.0, 0.0, 0.0, 6.0],
+        ]
+    )
+    obs = pd.DataFrame(
+        {
+            "cell_type": ["beta", "beta", "beta", "alpha", "alpha", "ductal"],
+            "batch": ["b1", "b1", "b2", "b1", "b2", "b2"],
+            "lineage": ["endocrine", "endocrine", "endocrine", "endocrine", "endocrine", "ductal"],
+        },
+        index=[f"cell{i}" for i in range(x.shape[0])],
+    )
+    var = pd.DataFrame(index=["INS", "IAPP", "GCG", "SOX9"])
+    adata = ad.AnnData(X=x, obs=obs, var=var)
+    path = tmp_path / "synthetic.h5ad"
+    adata.write_h5ad(path)
+    return path

@@ -8,7 +8,7 @@ def test_core_agent_subgraphs_are_defined() -> None:
     assert [spec.graph_id for spec in CORE_AGENT_SUBGRAPHS] == [
         "protocol_analysis_agent",
         "data_analysis_agent",
-        "integration_optimization_agent",
+        "protocol_optimizing_agent",
     ]
 
 
@@ -20,8 +20,8 @@ def test_core_agent_subgraphs_render_mermaid() -> None:
     assert "protocol_semantic_interpreter" in source
     assert "quality_and_evidence_auditor" in source
     assert "subgraph data_analysis_agent" in source
-    assert "subgraph integration_optimization_agent" in source
-    assert "correlation, not causality" in source
+    assert "subgraph protocol_optimizing_agent" in source
+    assert "association, not causality" in source
 
 
 def test_ipython_mermaid_markdown_wrapper() -> None:

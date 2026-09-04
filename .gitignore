@@ -8,3 +8,5 @@ runs/
 data/input/
 inputs/
 .tmp/
+*.h5ad
+external_tools/

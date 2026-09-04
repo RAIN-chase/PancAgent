@@ -31,7 +31,9 @@ backend/
     agents/
       protocol_analysis.py        # Implemented Protocol Analysis Agent
       data_analysis.py            # Data Analysis Agent framework and h5ad-compatible output contracts
+      protocol_optimizing.py      # Protocol Optimizing Agent framework and optimization output contracts
     orchestrator_agent.py         # External Orchestrator Agent graph and SubAgent routing tools
+    optimization_orchestration.py # PA/DA output readiness and rerun planning for optimization
     api.py                        # FastAPI backend API boundary
     langgraph_server.py           # LangGraph server chat graph for agent-chat-ui
     query_engine.py               # Deterministic protocol query and visualization tools
@@ -60,6 +62,7 @@ runs/
   protocol_analysis_agent_simplified_autofeatures/
 
 docs/
+  architecture_governance.md      # Runtime isolation, evidence envelope, deployment, and observability rules
 ```
 
 ## Runtime Boundary
@@ -96,6 +99,13 @@ Current LangGraph graphs:
 - `orchestrator` is exposed in `langgraph.json`.
 - It routes user questions to callable SubAgent tools for Protocol Analysis, Data Analysis, and Protocol Optimizing workflows.
 
+Runtime governance:
+
+- `docs/architecture_governance.md` defines the source/data/runtime boundary, multi-user isolation, evidence envelope, deployment configuration, and observability requirements.
+- New Orchestrator-facing SubAgent tools should return `orchestrator-evidence-envelope-v1`.
+- Server-side runs should pass `user_id`, `run_id`, `trace_id`, and `workspace_root` through Orchestrator state.
+- Default scoped runtime layout is `runs/users/<user_id>/runs/<run_id>/<agent_id>/` unless an explicit output directory is provided for backward compatibility.
+
 ## Recommended Orchestrator Design
 
 The long-term chat entrypoint should be an external Orchestrator Agent rather than a single domain agent.
@@ -123,7 +133,7 @@ Current implementation status:
 
 - Protocol Analysis Agent: implemented.
 - Data Analysis Agent: framework implemented with deterministic placeholder tool contracts.
-- Protocol Optimization Agent: scaffolded through IntegrationOptimizationAgent outputs and Orchestrator tool boundary.
+- Protocol Optimization Agent: framework implemented through `ProtocolOptimizingAgent`; recommendations are evidence-labeled hypotheses, not causal claims.
 - External Orchestrator Agent: framework implemented as a LangGraph entrypoint.
 
 ## Protocol Analysis Agent
@@ -402,7 +412,7 @@ runs/protocol_analysis_agent_simplified_autofeatures/visualizations/layered_prot
 
 ## Data Analysis Agent
 
-The Data Analysis Agent quantifies organoid h5ad datasets against in vivo reference atlases. The current implementation is an executable framework with deterministic placeholder tool contracts, so downstream integration can depend on stable output files before scanpy/anndata-backed numeric methods are connected.
+The Data Analysis Agent quantifies organoid h5ad datasets against in vivo reference atlases. The current implementation is an executable framework with first-pass anndata-backed tools for h5ad inspection, cell type composition, marker/gene program scoring, target-gene expression summaries, and lightweight differential expression. Methods that require heavier modeling, including reference latent mapping, GRN inference, and trajectory modeling, remain wrapper-backed placeholders until their runtime dependencies and reference resources are configured.
 
 Implementation:
 
@@ -432,9 +442,10 @@ flowchart TD
   E --> F[maturity_scoring]
   F --> G[reference_similarity_analysis]
   G --> H[regulatory_and_trajectory_placeholders]
-  H --> I[aggregate_quantitative_comparison]
-  I --> J[data_analysis_audit]
-  J --> K[export_results]
+  H --> I[external_tool_inventory]
+  I --> J[aggregate_quantitative_comparison]
+  J --> K[data_analysis_audit]
+  K --> L[export_results]
 ```
 
 Current outputs:
@@ -445,17 +456,104 @@ h5ad_qc_report.json
 cell_type_composition.csv
 marker_scores.csv
 gene_program_scores.csv
+gene_expression_summary.csv
+differential_expression.csv
 maturity_scores.csv
 similarity_scores.csv
 regulatory_program_scores.csv
 trajectory_scores.csv
+external_tool_inventory.csv
 data_analysis_protocol_summary.csv
 data_analysis_tool_registry.json
 data_analysis_comparison_report.json
+data_analysis_query_result.json
 h5ad_analysis_limitations.json
 ```
 
-The maturity scoring and organoid-reference similarity functions are intentionally stable stubs in this iteration. Their output schemas reserve slots for user-provided lineage gene programs, cosine similarity, and Euclidean distance.
+The h5ad implementation avoids default dense full-matrix conversion. It reads metadata in backed mode where possible and computes expression statistics by target genes and groups. The maturity scoring and organoid-reference similarity functions are still stable stubs in this iteration; their output schemas reserve slots for lineage gene programs, cosine similarity, and Euclidean distance.
+
+## Protocol Optimizing Agent
+
+The Protocol Optimizing Agent integrates protocol features with h5ad phenotype summaries and produces evidence-labeled optimization hypotheses. It is intentionally conservative: small-sample associations are never promoted to causal claims, and every recommendation is marked as requiring experimental validation.
+
+Implementation:
+
+```text
+backend/protocol_optimization_agent/agents/protocol_optimizing.py
+```
+
+Minimum intended inputs:
+
+```text
+protocol_output_dir/
+  protocol_feature_matrix.csv
+  stage_factor_matrix_or_events_summary.csv
+  protocol_feature_provenance.json
+
+data_analysis_output_dir/
+  maturity_scores.csv
+  similarity_scores.csv
+  cell_type_composition.csv
+  marker_scores.csv
+  gene_program_scores.csv
+  regulatory_program_scores.csv
+  trajectory_scores.csv
+  data_analysis_protocol_summary.csv
+  h5ad_summary_by_protocol.jsonl
+```
+
+`ProtocolOptimizingAgent.run()` executes an internal LangGraph `StateGraph`:
+
+```mermaid
+flowchart TD
+  A[integration_input_gate] --> B[phenotype_target_builder]
+  B --> C[protocol_phenotype_joiner]
+  C --> D[protocol_phenotype_association_analyzer]
+  D --> E[mechanistic_evidence_ranker]
+  E --> F[counterfactual_protocol_scorer]
+  F --> G[optimized_protocol_generator]
+  G --> H[optimization_audit]
+  H --> I[export_results]
+```
+
+Current outputs:
+
+```text
+optimization_input_gate_report.json
+phenotype_targets.csv
+protocol_phenotype_summary.csv
+protocol_phenotype_associations.csv
+optimization_candidate_features.csv
+counterfactual_protocol_predictions.json
+proposed_improved_protocol.json
+proposed_improved_protocol.md
+factor_recommendation_table.csv
+evidence_and_risk_report.json
+experimental_validation_plan.json
+experimental_validation_plan.md
+```
+
+Current optimization behavior:
+
+- Uses an orchestration readiness plan before running optimization.
+- Requires Protocol Analysis Agent and Data Analysis Agent output contracts to be present before Protocol Optimizing Agent execution.
+- Returns `upstream_rerun_required` when PA/DA outputs are missing or the caller requests upstream recomputation.
+- Builds multi-endpoint phenotype targets from maturity, reference similarity, composition, marker, gene-program, regulatory, and trajectory tables.
+- Joins protocol features to phenotype summaries by `protocol_id`.
+- Runs a conservative Pearson correlation screen only when at least three numeric protocol-phenotype pairs are available.
+- Falls back to biologically prioritized protocol-feature review when numeric phenotype outputs are pending.
+- Ranks candidate features with mechanism labels such as maturity/beta identity, developmental pathway, microenvironment, and workflow sequence axes.
+- Scores an optional new protocol by nearest-neighbor similarity in the existing protocol feature space.
+- Writes protocol recommendations as hypotheses with confidence, risk, provenance status, and experimental-validation requirements.
+
+Optimization orchestration statuses:
+
+```text
+upstream_rerun_required          # PA or DA outputs are missing, stale by caller policy, or explicitly forced for recomputation
+optimization_ran                 # PO executed against current PA/DA outputs
+ok_cached_optimization_outputs   # existing PO outputs are reused
+no_prior_optimization_outputs    # PA/DA are ready but no PO output exists
+```
 
 ## Model And API Configuration
 
@@ -472,6 +570,10 @@ DeepSeek/OpenAI-compatible configuration is supported for chat and LLM-assisted 
 Typical environment variables:
 
 ```env
+PROTOCOL_WORKSPACE_ROOT=runs
+PROTOCOL_USER_ID=local_user
+PROTOCOL_RUN_ID=manual_test
+PROTOCOL_TRACE_ID=trace_manual_test
 PROTOCOL_CHAT_LLM_PROVIDER=deepseek
 PROTOCOL_CHAT_MODEL=deepseek-chat
 PROTOCOL_CHAT_API_KEY_ENV=DEEPSEEK_API_KEY
@@ -485,6 +587,12 @@ The current policy is:
 - LLM can call tools.
 - LLM can summarize evidence.
 - LLM cannot directly write final matrix values.
+
+Orchestrator answer policy:
+
+- LLM-facing SubAgent outputs must include `used_tools`, `used_features`, `evidence_refs`, and `confidence_caveats`.
+- Frontend-specific renderers should consume structured envelope fields and durable `output_files`, not scrape assistant prose.
+- Tool-call logs and run manifests are written under the scoped run directory when Orchestrator context is provided.
 
 ## Current Completed Work
 
@@ -526,7 +634,7 @@ Near-term:
 - Add an external Orchestrator Agent graph as the main `agent-chat-ui` entrypoint.
 - Route protocol questions to Protocol Analysis tools.
 - Connect Data Analysis Agent stubs to real scanpy/anndata-backed h5ad tools.
-- Add Protocol Optimization Agent stubs and later evidence-ranked recommendation generation.
+- Expand Protocol Optimizing Agent from framework outputs to stronger small-sample association, mechanism prior, and active-learning recommendation modules.
 - Add graph-specific visualization for sequence features, such as transition networks or Sankey-style summaries.
 - Add better frontend rendering for generated SVG/HTML artifacts.
 
@@ -546,6 +654,8 @@ Recommended development organization:
 - Store decisions in docs and tests, not only in chat history.
 - Expose one final orchestrator graph to the frontend.
 - Keep domain agents modular and tool-callable.
+- Keep heavy runtime outputs in ignored or external directories: `runs/`, `external_tools/`, `inputs/`, and real `.h5ad` files are not source.
+- Preserve deterministic governance of `protocol_feature_matrix.csv`; LLMs may propose registry candidates or summarize evidence, but deterministic compiler code owns final matrix values.
 
 Commit discipline:
 
