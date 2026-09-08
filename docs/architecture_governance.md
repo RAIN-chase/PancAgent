@@ -63,9 +63,30 @@ Agent IDs:
 
 Compatibility rule:
 
-- Explicit `*_output_dir` values still win for backward compatibility.
+- Explicit `*_output_dir` values still win for backward compatibility only when they resolve under the authorized runtime workspace.
 - Environment variables are accepted for local development.
 - New server workflows should pass `user_id`, `run_id`, `trace_id`, and `workspace_root` through Orchestrator state.
+- `PROTOCOL_ALLOW_EXTERNAL_OUTPUT_DIR=1` may be used for local development, but should not be enabled for multi-user service deployment.
+- Server deployment should derive `user_id` from authenticated service context and should not trust user-supplied filesystem paths.
+
+## Cache And Readiness
+
+Readiness must validate output content, not just file presence.
+
+Current checks:
+
+- required output file existence
+- empty required output files
+- metadata/content fingerprints for required PA and DA outputs
+- objective and new protocol feature payloads included in optimization cache keys
+
+Rules:
+
+- Changing `objective` invalidates cached Protocol Optimizing Agent results.
+- Changing PA/DA output content invalidates cached Protocol Optimizing Agent results.
+- A Data Analysis query with requested genes, groups, protocol, dataset, sample, or condition must not return unrelated cached rows.
+- If cached rows exist but do not match the structured request, return `no_matching_cached_result` unless structured inputs are provided for execution.
+- If upstream inputs are provided to the Orchestrator optimization tool, missing PA/DA outputs may be generated before PO readiness is rebuilt.
 
 ## Orchestrator Evidence Envelope
 
@@ -161,6 +182,8 @@ Minimum data query operations:
 ## Frontend Protocol-Specific Contract
 
 The current frontend may remain generic chat UI, but SubAgent outputs should support protocol-specific rendering.
+
+The default frontend assistant id should point to `orchestrator`; `protocol_chat` remains available as a lower-level Protocol Analysis chat graph.
 
 Recommended UI blocks:
 

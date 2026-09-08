@@ -12,8 +12,8 @@ from uuid import uuid4
 
 from protocol_optimization_agent.io import ensure_dir
 
-
 DEFAULT_WORKSPACE_ROOT = Path("runs")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True)
@@ -62,13 +62,27 @@ def resolve_agent_output_dir(
     context: RunContext,
 ) -> str:
     if explicit_value:
-        return explicit_value
+        return str(authorize_output_path(Path(explicit_value), context))
     env_value = os.getenv(env_var)
     if env_value:
-        return env_value
-    if os.getenv("PROTOCOL_WORKSPACE_ROOT") or os.getenv("PROTOCOL_USER_ID") or os.getenv("PROTOCOL_RUN_ID"):
+        return str(authorize_output_path(Path(env_value), context))
+    if default_value:
         return str(context.agent_output_dir(agent_id))
-    return default_value
+    return str(context.agent_output_dir(agent_id))
+
+
+def authorize_output_path(path: Path, context: RunContext) -> Path:
+    resolved = path if path.is_absolute() else (Path.cwd() / path).resolve()
+    workspace_root = context.workspace_root if context.workspace_root.is_absolute() else (Path.cwd() / context.workspace_root).resolve()
+    allowed_roots = [workspace_root, PROJECT_ROOT / "runs"]
+    if os.getenv("PROTOCOL_ALLOW_EXTERNAL_OUTPUT_DIR") == "1":
+        return resolved
+    if any(_is_relative_to(resolved, root.resolve()) for root in allowed_roots):
+        return resolved
+    raise ValueError(
+        "Output path is outside the authorized runtime workspace. "
+        "Use a path under PROTOCOL_WORKSPACE_ROOT or set PROTOCOL_ALLOW_EXTERNAL_OUTPUT_DIR=1 for local development."
+    )
 
 
 def write_run_manifest(
@@ -78,6 +92,13 @@ def write_run_manifest(
     inputs: dict[str, str] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> Path:
+    previous_tasks = _read_previous_manifest_tasks(context.manifest_path())
+    task = {
+        "timestamp_utc": _utc_now(),
+        "output_dirs": output_dirs,
+        "inputs": _input_fingerprints(inputs or {}),
+        "extra": extra or {},
+    }
     payload = {
         "schema_version": "run-manifest-v1",
         "created_at_utc": _utc_now(),
@@ -86,14 +107,26 @@ def write_run_manifest(
         "trace_id": context.trace_id,
         "workspace_root": str(context.workspace_root),
         "output_dirs": output_dirs,
-        "inputs": _input_fingerprints(inputs or {}),
+        "inputs": task["inputs"],
         "output_version": "protocol-optimization-agent-v1",
         "extra": extra or {},
+        "tasks": [*previous_tasks, task],
     }
     path = context.manifest_path()
     ensure_dir(path.parent)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+def content_fingerprint(paths: dict[str, str], extra: dict[str, Any] | None = None) -> str:
+    digest = hashlib.sha256()
+    for key, value in sorted(paths.items()):
+        fingerprint = _fingerprint_path(Path(value))
+        digest.update(key.encode("utf-8"))
+        digest.update(json.dumps(fingerprint, sort_keys=True, ensure_ascii=True).encode("utf-8"))
+    if extra:
+        digest.update(json.dumps(extra, sort_keys=True, ensure_ascii=True, default=str).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def append_tool_call_log(
@@ -205,6 +238,25 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _read_previous_manifest_tasks(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    tasks = payload.get("tasks", [])
+    return tasks if isinstance(tasks, list) else []
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _safe_id(value: str) -> str:

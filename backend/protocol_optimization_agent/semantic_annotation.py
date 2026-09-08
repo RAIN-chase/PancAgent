@@ -35,7 +35,7 @@ def annotate_protocol_semantics(
     for record in protocol_records:
         protocol = record.get("protocol") or {}
         protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
-        if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
             continue
         for stage in sorted(
             record.get("stages") or [], key=lambda item: _safe_float(item.get("stage_index"), 9999) or 9999
@@ -156,7 +156,7 @@ def _build_protocol_strategy_summaries(
     for record in protocol_records:
         protocol = record.get("protocol") or {}
         protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
-        if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
             continue
         modules = _dedupe_modules(
             StrategyModule(module)
@@ -255,3 +255,7 @@ def _safe_float(value: Any, default: float | None) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _is_accepted_protocol(protocol_id: str, accepted_protocol_ids: set[str]) -> bool:
+    return bool(protocol_id) and protocol_id in accepted_protocol_ids

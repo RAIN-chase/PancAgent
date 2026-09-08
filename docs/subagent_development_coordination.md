@@ -450,6 +450,17 @@ Use this format for every SubAgent session.
 - Limitations: LLM latency/cost tracking and protocol-specific frontend components are documented as required next steps, not fully implemented here.
 - Next actions: Data Analysis Agent should fill real h5ad numeric operations behind the envelope; frontend work should render envelope blocks such as feature diff tables, evidence cards, stage timelines, DE previews, and heatmap previews.
 
+### 2026-09-05 - Orchestrator Review Fixes
+
+- Scope: Addressed Orchestrator review findings around structured Data Analysis requests, cache/readiness validity, runtime path isolation, audit semantics, and frontend default graph selection.
+- Files changed: `backend/protocol_optimization_agent/orchestrator_agent.py`, `backend/protocol_optimization_agent/optimization_orchestration.py`, `backend/protocol_optimization_agent/runtime.py`, `backend/tests/test_orchestrator_agent.py`, `docs/current_project_architecture.md`, `docs/architecture_governance.md`, `frontend/.env.local.example`, `scripts/start_frontend.ps1`
+- Capabilities added or changed: Data Analysis Orchestrator tool now accepts structured `request`, `h5ad_manifest_rows`, `h5ad_config`, and `force_rerun`; cached DA rows are filtered by requested genes/protocol/dataset/sample/condition/groups and return `no_matching_cached_result` instead of unrelated data. Protocol optimization can execute PA/DA first when structured upstream inputs are supplied, validates cache with upstream fingerprints plus objective/new protocol features, and records actual used tools. Runtime path resolution defaults to scoped user/run directories and rejects output paths outside the authorized workspace unless explicitly allowed for local development.
+- Tests run: `pytest backend/tests/test_orchestrator_agent.py`; `pytest`; `git diff --check`
+- Results: `backend/tests/test_orchestrator_agent.py` passed with 7 tests; full backend test suite passed with 34 tests; whitespace check passed.
+- Contract changes: PO cache metadata now uses `optimization-cache-metadata-v1`; optimization readiness now includes `empty_files`, `fingerprint`, and `cache_key`; frontend defaults to `orchestrator`.
+- Limitations: Protocol Analysis execution from raw artifacts is only available to the PO Orchestrator tool when callers provide `protocol_records` and `factor_events`; production multi-user auth still needs to bind `user_id` server-side rather than from client-controlled state.
+- Next actions: Add service-layer auth binding for `RunContext`, richer LLM planning for structured DA requests, and frontend renderers for the evidence envelope.
+
 ### 2026-09-04 - Data Analysis Agent
 
 - Scope: Advanced Data Analysis Agent from placeholder contracts to first-pass executable h5ad analysis and Orchestrator-readable query outputs.

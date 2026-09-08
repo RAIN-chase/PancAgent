@@ -235,6 +235,7 @@ def inspect_h5ad_dataset(row: dict[str, Any], h5ad_config: dict[str, Any]) -> di
         var_names = [str(name) for name in list(adata.var_names[: int(h5ad_config.get("var_preview_limit", 20))])]
         layers = [str(layer) for layer in getattr(adata, "layers", {}).keys()]
         obsm_keys = [str(key) for key in getattr(adata, "obsm", {}).keys()]
+        cell_selection = _select_manifest_cells(adata, normalized)
         missing_columns = [
             column
             for column in (
@@ -245,13 +246,23 @@ def inspect_h5ad_dataset(row: dict[str, Any], h5ad_config: dict[str, Any]) -> di
             )
             if column and column not in obs_columns
         ]
+        limitations = [_limitation(common, "obs_column_missing", column) for column in missing_columns]
+        if cell_selection["status"] != "ok":
+            limitations.append(
+                _limitation(common, cell_selection["status"], cell_selection["message"])
+            )
         return {
             **common,
             "h5ad_path": str(path),
-            "status": "ok" if not missing_columns else "metadata_column_missing",
+            "status": _inspection_status(missing_columns, cell_selection),
             "dependency_status": dependency,
             "n_obs": int(adata.n_obs),
             "n_vars": int(adata.n_vars),
+            "n_cells_total": int(adata.n_obs),
+            "n_cells_selected": cell_selection["n_cells_selected"],
+            "cell_filter_status": cell_selection["status"],
+            "cell_filter": cell_selection["filter_summary"],
+            "cell_filter_conditions": cell_selection["filters"],
             "obs_columns": obs_columns,
             "var_names_preview": var_names,
             "layers": layers,
@@ -261,10 +272,7 @@ def inspect_h5ad_dataset(row: dict[str, Any], h5ad_config: dict[str, Any]) -> di
             "batch_column": normalized["batch_column"],
             "lineage_column": normalized["lineage_column"],
             "missing_metadata_columns": missing_columns,
-            "limitations": [
-                _limitation(common, "obs_column_missing", column)
-                for column in missing_columns
-            ],
+            "limitations": limitations,
         }
     except Exception as exc:  # pragma: no cover - exercised by malformed user files
         return {
@@ -284,13 +292,41 @@ def compute_cell_type_composition(row: dict[str, Any], h5ad_config: dict[str, An
     inspection = inspect_h5ad_dataset(normalized, h5ad_config)
     if inspection["status"] in {"dependency_missing", "h5ad_file_missing", "h5ad_read_error"}:
         return [{**common, "cell_type": "", "proportion": "", "n_cells": "", "status": inspection["status"]}]
+    if inspection.get("cell_filter_status") != "ok":
+        return [
+            {
+                **common,
+                "cell_type": "",
+                "proportion": "",
+                "n_cells": "",
+                "n_cells_selected": inspection.get("n_cells_selected", ""),
+                "n_cells_total": inspection.get("n_cells_total", ""),
+                "cell_filter": inspection.get("cell_filter", ""),
+                "status": inspection.get("cell_filter_status", "cell_filter_failed"),
+            }
+        ]
     cell_type_column = normalized["cell_type_column"]
     if cell_type_column not in inspection.get("obs_columns", []):
         return [{**common, "cell_type": "", "proportion": "", "n_cells": "", "status": "obs_column_missing"}]
     adata = None
     try:
         adata = _read_h5ad(Path(normalized["h5ad_path"]), backed=True)
-        counts = adata.obs[cell_type_column].astype(str).value_counts(dropna=False)
+        cell_selection = _select_manifest_cells(adata, normalized)
+        if cell_selection["status"] != "ok":
+            return [
+                {
+                    **common,
+                    "cell_type": "",
+                    "proportion": "",
+                    "n_cells": "",
+                    "n_cells_selected": cell_selection["n_cells_selected"],
+                    "n_cells_total": cell_selection["n_cells_total"],
+                    "cell_filter": cell_selection["filter_summary"],
+                    "status": cell_selection["status"],
+                }
+            ]
+        selected_obs = adata.obs.loc[cell_selection["mask"], cell_type_column]
+        counts = selected_obs.astype(str).value_counts(dropna=False)
         total = int(counts.sum())
         return [
             {
@@ -298,6 +334,9 @@ def compute_cell_type_composition(row: dict[str, Any], h5ad_config: dict[str, An
                 "cell_type": str(cell_type),
                 "proportion": round(int(n_cells) / total, 6) if total else "",
                 "n_cells": int(n_cells),
+                "n_cells_selected": cell_selection["n_cells_selected"],
+                "n_cells_total": cell_selection["n_cells_total"],
+                "cell_filter": cell_selection["filter_summary"],
                 "status": "ok",
             }
             for cell_type, n_cells in counts.items()
@@ -325,16 +364,59 @@ def query_gene_expression(
     adata = None
     try:
         adata = _read_h5ad(path, backed=bool(h5ad_config.get("backed", False)))
+        cell_selection = _select_manifest_cells(adata, normalized)
+        if cell_selection["status"] != "ok":
+            return [
+                {
+                    **common,
+                    "gene": "",
+                    "group": "",
+                    "n_cells_selected": cell_selection["n_cells_selected"],
+                    "n_cells_total": cell_selection["n_cells_total"],
+                    "cell_filter": cell_selection["filter_summary"],
+                    "status": cell_selection["status"],
+                    "message": cell_selection["message"],
+                }
+            ]
         if groupby and groupby not in adata.obs.columns:
             return [{**common, "gene": "", "group": "", "status": "obs_column_missing", "obs_column": groupby}]
-        groups = _group_masks(adata, groupby)
+        expression_source = _resolve_expression_source(adata, h5ad_config)
+        if expression_source["status"] != "ok":
+            return [
+                {
+                    **common,
+                    "gene": "",
+                    "group": "",
+                    "n_cells_selected": cell_selection["n_cells_selected"],
+                    "n_cells_total": cell_selection["n_cells_total"],
+                    "cell_filter": cell_selection["filter_summary"],
+                    "status": expression_source["status"],
+                    "message": expression_source["message"],
+                    "expression_source": expression_source["source_label"],
+                }
+            ]
+        groups = _group_masks(adata, groupby, cell_selection["mask"])
         rows: list[dict[str, Any]] = []
-        var_index = {str(gene): index for index, gene in enumerate(adata.var_names)}
+        var_index = {str(gene): index for index, gene in enumerate(expression_source["var_names"])}
         for gene in target_genes:
             if gene not in var_index:
-                rows.append({**common, "gene": gene, "group": "", "mean_expression": "", "pct_expressing": "", "n_cells": "", "status": "gene_not_found"})
+                rows.append(
+                    {
+                        **common,
+                        "gene": gene,
+                        "group": "",
+                        "mean_expression": "",
+                        "pct_expressing": "",
+                        "n_cells": "",
+                        "n_cells_selected": cell_selection["n_cells_selected"],
+                        "n_cells_total": cell_selection["n_cells_total"],
+                        "cell_filter": cell_selection["filter_summary"],
+                        "expression_source": expression_source["source_label"],
+                        "status": "gene_not_found",
+                    }
+                )
                 continue
-            vector = _gene_vector(adata, var_index[gene], h5ad_config)
+            vector = _gene_vector(expression_source, var_index[gene])
             for group, mask in groups:
                 values = vector[mask]
                 rows.append(
@@ -346,8 +428,12 @@ def query_gene_expression(
                         "mean_expression": round(float(values.mean()), 6) if values.size else "",
                         "pct_expressing": round(float((values > 0).sum()) / float(values.size), 6) if values.size else "",
                         "n_cells": int(values.size),
+                        "n_cells_selected": cell_selection["n_cells_selected"],
+                        "n_cells_total": cell_selection["n_cells_total"],
+                        "cell_filter": cell_selection["filter_summary"],
                         "layer": str(h5ad_config.get("layer") or ""),
                         "use_raw": bool(h5ad_config.get("use_raw", False)),
+                        "expression_source": expression_source["source_label"],
                         "status": "ok",
                     }
                 )
@@ -420,11 +506,45 @@ def compute_differential_expression(
     adata = None
     try:
         adata = _read_h5ad(path, backed=bool(h5ad_config.get("backed", False)))
+        cell_selection = _select_manifest_cells(adata, normalized)
+        if cell_selection["status"] != "ok":
+            return [
+                {
+                    **common,
+                    "gene": "",
+                    "groupby": groupby,
+                    "group_a": group_a,
+                    "group_b": group_b,
+                    "n_cells_selected": cell_selection["n_cells_selected"],
+                    "n_cells_total": cell_selection["n_cells_total"],
+                    "cell_filter": cell_selection["filter_summary"],
+                    "status": cell_selection["status"],
+                    "message": cell_selection["message"],
+                }
+            ]
         if groupby not in adata.obs.columns:
             return [{**common, "gene": "", "groupby": groupby, "status": "obs_column_missing"}]
+        expression_source = _resolve_expression_source(adata, h5ad_config)
+        if expression_source["status"] != "ok":
+            return [
+                {
+                    **common,
+                    "gene": "",
+                    "groupby": groupby,
+                    "group_a": group_a,
+                    "group_b": group_b,
+                    "n_cells_selected": cell_selection["n_cells_selected"],
+                    "n_cells_total": cell_selection["n_cells_total"],
+                    "cell_filter": cell_selection["filter_summary"],
+                    "status": expression_source["status"],
+                    "message": expression_source["message"],
+                    "expression_source": expression_source["source_label"],
+                }
+            ]
         labels = adata.obs[groupby].astype(str)
-        mask_a = labels == str(group_a)
-        mask_b = labels == str(group_b)
+        selected_mask = cell_selection["mask"]
+        mask_a = selected_mask & (labels == str(group_a)).to_numpy()
+        mask_b = selected_mask & (labels == str(group_b)).to_numpy()
         if int(mask_a.sum()) < 1 or int(mask_b.sum()) < 1:
             return [
                 {
@@ -433,21 +553,40 @@ def compute_differential_expression(
                     "groupby": groupby,
                     "group_a": group_a,
                     "group_b": group_b,
+                    "n_cells_selected": cell_selection["n_cells_selected"],
+                    "n_cells_total": cell_selection["n_cells_total"],
+                    "cell_filter": cell_selection["filter_summary"],
                     "status": "insufficient_groups_for_de",
                 }
             ]
-        target_genes = _limit_genes(genes or list(map(str, adata.var_names)), h5ad_config)
-        var_index = {str(gene): index for index, gene in enumerate(adata.var_names)}
+        target_genes = _limit_genes(genes or list(map(str, expression_source["var_names"])), h5ad_config)
+        var_index = {str(gene): index for index, gene in enumerate(expression_source["var_names"])}
         rows: list[dict[str, Any]] = []
+        expression_scale = str(h5ad_config.get("expression_scale") or "unspecified")
         for gene in target_genes:
             if gene not in var_index:
-                rows.append({**common, "gene": gene, "groupby": groupby, "group_a": group_a, "group_b": group_b, "status": "gene_not_found"})
+                rows.append(
+                    {
+                        **common,
+                        "gene": gene,
+                        "groupby": groupby,
+                        "group_a": group_a,
+                        "group_b": group_b,
+                        "n_cells_selected": cell_selection["n_cells_selected"],
+                        "n_cells_total": cell_selection["n_cells_total"],
+                        "cell_filter": cell_selection["filter_summary"],
+                        "expression_scale": expression_scale,
+                        "expression_source": expression_source["source_label"],
+                        "status": "gene_not_found",
+                    }
+                )
                 continue
-            vector = _gene_vector(adata, var_index[gene], h5ad_config)
-            values_a = vector[mask_a.to_numpy()]
-            values_b = vector[mask_b.to_numpy()]
+            vector = _gene_vector(expression_source, var_index[gene])
+            values_a = vector[mask_a]
+            values_b = vector[mask_b]
             mean_a = float(values_a.mean()) if values_a.size else 0.0
             mean_b = float(values_b.mean()) if values_b.size else 0.0
+            log2_fold_change, effect_size_type = _de_effect_size(mean_a, mean_b, expression_scale)
             rows.append(
                 {
                     **common,
@@ -458,10 +597,18 @@ def compute_differential_expression(
                     "mean_a": round(mean_a, 6),
                     "mean_b": round(mean_b, 6),
                     "mean_diff": round(mean_a - mean_b, 6),
-                    "log2_fold_change": round(math.log2((mean_a + 1e-9) / (mean_b + 1e-9)), 6),
+                    "log2_fold_change": log2_fold_change,
+                    "effect_size_type": effect_size_type,
                     "p_value": _welch_p_value(values_a, values_b),
+                    "multiple_testing": "not_adjusted",
+                    "statistical_scope": "descriptive_cell_level_welch_test_no_replicate_model",
+                    "expression_scale": expression_scale,
+                    "expression_source": expression_source["source_label"],
                     "n_cells_a": int(values_a.size),
                     "n_cells_b": int(values_b.size),
+                    "n_cells_selected": cell_selection["n_cells_selected"],
+                    "n_cells_total": cell_selection["n_cells_total"],
+                    "cell_filter": cell_selection["filter_summary"],
                     "status": "ok",
                 }
             )
@@ -490,6 +637,12 @@ def normalize_manifest_row(row: dict[str, Any], h5ad_config: dict[str, Any]) -> 
             row.get("lineage_col") or row.get("lineage_column") or h5ad_config.get("lineage_column", "lineage")
         ),
         "donor_column": str(row.get("donor_col") or row.get("donor_column") or h5ad_config.get("donor_column", "")),
+        "sample_column": str(row.get("sample_col") or row.get("sample_column") or h5ad_config.get("sample_column", "sample_id")),
+        "condition_column": str(
+            row.get("condition_col") or row.get("condition_column") or h5ad_config.get("condition_column", "condition_id")
+        ),
+        "protocol_column": str(row.get("protocol_col") or row.get("protocol_column") or h5ad_config.get("protocol_column", "")),
+        "dataset_column": str(row.get("dataset_col") or row.get("dataset_column") or h5ad_config.get("dataset_column", "")),
         "matched_reference_dataset_id": str(
             row.get("matched_reference_dataset_id") or h5ad_config.get("reference_dataset_id", "")
         ),
@@ -543,7 +696,8 @@ def score_gene_program_maturity_placeholder(
             "lineage": lineage,
             "maturity_score": "",
             "score_method": "gene_program_maturity_score_pending",
-            "status": "pending",
+            "status": "input_data_pending",
+            "limitation": "requires_gene_program_scoring_function_and_reference_calibration",
         }
         for lineage in lineages
     ]
@@ -560,7 +714,8 @@ def compare_reference_similarity_placeholder(row: dict[str, Any], h5ad_config: d
             "cosine_similarity": "",
             "euclidean_distance": "",
             "similarity_score": "",
-            "status": "pending",
+            "status": "input_data_pending",
+            "limitation": "requires_reference_atlas_cell_type_alignment_and_similarity_function",
         }
     ]
 
@@ -689,27 +844,135 @@ def _limit_genes(genes: list[str], h5ad_config: dict[str, Any]) -> list[str]:
     return [str(gene) for gene in genes[:max_genes]]
 
 
-def _group_masks(adata: Any, groupby: str | None) -> list[tuple[str, Any]]:
+def _inspection_status(missing_columns: list[str], cell_selection: dict[str, Any]) -> str:
+    if cell_selection["status"] != "ok":
+        return cell_selection["status"]
+    return "ok" if not missing_columns else "metadata_column_missing"
+
+
+def _select_manifest_cells(adata: Any, row: dict[str, Any]) -> dict[str, Any]:
     import numpy as np
 
+    mask = np.ones(adata.n_obs, dtype=bool)
+    filters: list[dict[str, str]] = []
+    field_column_pairs = (
+        ("sample_id", "sample_column"),
+        ("condition_id", "condition_column"),
+        ("protocol_id", "protocol_column"),
+        ("dataset_id", "dataset_column"),
+    )
+    for field, column_key in field_column_pairs:
+        value = str(row.get(field) or "")
+        column = str(row.get(column_key) or "")
+        if not value or not column:
+            continue
+        if column not in adata.obs.columns:
+            return {
+                "status": "cell_filter_column_missing",
+                "message": f"Manifest field {field}={value!r} requires obs column {column!r}.",
+                "mask": mask & False,
+                "filters": filters + [{"manifest_field": field, "obs_column": column, "value": value}],
+                "filter_summary": _format_cell_filter(filters + [{"manifest_field": field, "obs_column": column, "value": value}]),
+                "n_cells_selected": 0,
+                "n_cells_total": int(adata.n_obs),
+            }
+        values = adata.obs[column].astype(str).to_numpy()
+        mask = mask & (values == value)
+        filters.append({"manifest_field": field, "obs_column": column, "value": value})
+
+    status = "ok" if int(mask.sum()) > 0 else "cell_filter_no_cells"
+    message = "ok" if status == "ok" else "Manifest filters selected 0 cells."
+    return {
+        "status": status,
+        "message": message,
+        "mask": mask,
+        "filters": filters,
+        "filter_summary": _format_cell_filter(filters),
+        "n_cells_selected": int(mask.sum()),
+        "n_cells_total": int(adata.n_obs),
+    }
+
+
+def _format_cell_filter(filters: list[dict[str, str]]) -> str:
+    if not filters:
+        return "all_cells"
+    return ";".join(f"{item['obs_column']}={item['value']}" for item in filters)
+
+
+def _group_masks(adata: Any, groupby: str | None, selected_mask: Any | None = None) -> list[tuple[str, Any]]:
+    import numpy as np
+
+    base_mask = selected_mask if selected_mask is not None else np.ones(adata.n_obs, dtype=bool)
     if not groupby:
-        return [("all", np.ones(adata.n_obs, dtype=bool))]
+        return [("all", base_mask)]
     labels = adata.obs[groupby].astype(str)
-    return [(str(group), (labels == str(group)).to_numpy()) for group in sorted(labels.unique())]
+    selected_labels = labels[base_mask]
+    return [(str(group), base_mask & (labels == str(group)).to_numpy()) for group in sorted(selected_labels.unique())]
 
 
-def _gene_vector(adata: Any, gene_index: int, h5ad_config: dict[str, Any]) -> Any:
+def _resolve_expression_source(adata: Any, h5ad_config: dict[str, Any]) -> dict[str, Any]:
+    use_raw = bool(h5ad_config.get("use_raw", False))
+    layer = str(h5ad_config.get("layer") or "")
+    if use_raw and layer:
+        return {
+            "status": "expression_source_conflict",
+            "message": "use_raw=True and layer are mutually exclusive for this analysis contract.",
+            "source_label": "raw.X",
+        }
+    if use_raw:
+        raw = getattr(adata, "raw", None)
+        if raw is None:
+            return {
+                "status": "expression_source_missing",
+                "message": "use_raw=True requested but adata.raw is not available.",
+                "source_label": "raw.X",
+            }
+        return {
+            "status": "ok",
+            "message": "ok",
+            "matrix": raw.X,
+            "var_names": [str(gene) for gene in raw.var_names],
+            "source_label": "raw.X",
+        }
+    if layer:
+        if layer not in getattr(adata, "layers", {}):
+            return {
+                "status": "expression_source_missing",
+                "message": f"Layer {layer!r} requested but not present in adata.layers.",
+                "source_label": f"layers[{layer}]",
+            }
+        return {
+            "status": "ok",
+            "message": "ok",
+            "matrix": adata.layers[layer],
+            "var_names": [str(gene) for gene in adata.var_names],
+            "source_label": f"layers[{layer}]",
+        }
+    return {
+        "status": "ok",
+        "message": "ok",
+        "matrix": adata.X,
+        "var_names": [str(gene) for gene in adata.var_names],
+        "source_label": "X",
+    }
+
+
+def _gene_vector(expression_source: dict[str, Any], gene_index: int) -> Any:
     import numpy as np
 
-    matrix_source = adata.raw if bool(h5ad_config.get("use_raw", False)) and getattr(adata, "raw", None) is not None else adata
-    layer = h5ad_config.get("layer")
-    if layer and hasattr(matrix_source, "layers") and layer in matrix_source.layers:
-        matrix = matrix_source.layers[layer][:, gene_index]
-    else:
-        matrix = matrix_source.X[:, gene_index]
+    matrix = expression_source["matrix"][:, gene_index]
     if hasattr(matrix, "toarray"):
         return np.asarray(matrix.toarray()).ravel()
     return np.asarray(matrix).ravel()
+
+
+def _de_effect_size(mean_a: float, mean_b: float, expression_scale: str) -> tuple[float | str, str]:
+    fold_change_scales = {"counts", "raw_counts", "normalized", "normalized_counts", "cpm", "tpm"}
+    if expression_scale not in fold_change_scales:
+        return "", "mean_difference_only_expression_scale_not_fold_change_compatible"
+    if mean_a < 0 or mean_b < 0:
+        return "", "mean_difference_only_negative_values"
+    return round(math.log2((mean_a + 1e-9) / (mean_b + 1e-9)), 6), "log2_fold_change"
 
 
 def _welch_p_value(values_a: Any, values_b: Any) -> float | str:

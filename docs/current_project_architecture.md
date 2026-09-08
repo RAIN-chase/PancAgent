@@ -105,6 +105,8 @@ Runtime governance:
 - New Orchestrator-facing SubAgent tools should return `orchestrator-evidence-envelope-v1`.
 - Server-side runs should pass `user_id`, `run_id`, `trace_id`, and `workspace_root` through Orchestrator state.
 - Default scoped runtime layout is `runs/users/<user_id>/runs/<run_id>/<agent_id>/` unless an explicit output directory is provided for backward compatibility.
+- Explicit Orchestrator output paths must resolve under the authorized runtime workspace unless `PROTOCOL_ALLOW_EXTERNAL_OUTPUT_DIR=1` is set for local development.
+- Optimization cache validity is tied to upstream output fingerprints plus objective and candidate protocol features, not just the presence of recommendation files.
 
 ## Recommended Orchestrator Design
 
@@ -134,7 +136,7 @@ Current implementation status:
 - Protocol Analysis Agent: implemented.
 - Data Analysis Agent: framework implemented with deterministic placeholder tool contracts.
 - Protocol Optimization Agent: framework implemented through `ProtocolOptimizingAgent`; recommendations are evidence-labeled hypotheses, not causal claims.
-- External Orchestrator Agent: framework implemented as a LangGraph entrypoint.
+- External Orchestrator Agent: framework implemented as a LangGraph entrypoint with structured request envelopes, cache/readiness checks, scoped runtime context, and optional upstream SubAgent execution when structured inputs are provided.
 
 ## Protocol Analysis Agent
 
@@ -524,6 +526,7 @@ phenotype_targets.csv
 protocol_phenotype_summary.csv
 protocol_phenotype_associations.csv
 optimization_candidate_features.csv
+optimized_protocol_edits.json
 counterfactual_protocol_predictions.json
 proposed_improved_protocol.json
 proposed_improved_protocol.md
@@ -539,11 +542,14 @@ Current optimization behavior:
 - Requires Protocol Analysis Agent and Data Analysis Agent output contracts to be present before Protocol Optimizing Agent execution.
 - Returns `upstream_rerun_required` when PA/DA outputs are missing or the caller requests upstream recomputation.
 - Builds multi-endpoint phenotype targets from maturity, reference similarity, composition, marker, gene-program, regulatory, and trajectory tables.
+- Assigns each phenotype endpoint a `direction`, `weight`, `confidence`, and objective-aware score so positive maturity/readiness metrics and negative stress/off-target metrics are not averaged in the wrong direction.
 - Joins protocol features to phenotype summaries by `protocol_id`.
-- Runs a conservative Pearson correlation screen only when at least three numeric protocol-phenotype pairs are available.
+- Carries confounder markers such as dataset, paper, cell line, assay, timepoint, batch, condition, and sample when those fields are available.
+- Runs a conservative Pearson correlation screen against the objective-weighted phenotype score only when at least five numeric protocol-phenotype pairs are available.
 - Falls back to biologically prioritized protocol-feature review when numeric phenotype outputs are pending.
 - Ranks candidate features with mechanism labels such as maturity/beta identity, developmental pathway, microenvironment, and workflow sequence axes.
-- Scores an optional new protocol by nearest-neighbor similarity in the existing protocol feature space.
+- Converts ranked candidates into stage-level protocol edits with target stage/day, reagent or operation, dose or condition range, evidence refs, negative controls, and validation readouts.
+- Scores an optional new protocol as a scaled similar-protocol reference report with feature coverage and out-of-distribution flags; this is not treated as a causal or supervised prediction model.
 - Writes protocol recommendations as hypotheses with confidence, risk, provenance status, and experimental-validation requirements.
 
 Optimization orchestration statuses:

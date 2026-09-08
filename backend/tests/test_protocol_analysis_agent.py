@@ -112,6 +112,7 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
     assert outputs["protocol_workflow_graphs"].exists()
     assert outputs["protocol_feature_provenance"].exists()
     assert outputs["quantification_coverage_report"].exists()
+    assert outputs["lossless_protocol_representation_audit"].exists()
     assert outputs["protocol_embedding"].exists()
     assert outputs["protocol_cluster_report"].exists()
 
@@ -163,6 +164,16 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
     assert coverage["reagent_coverage"]["missing_reagents"] == []
     assert coverage["factor_type_coverage"]["missing_factor_types"] == []
     assert coverage["action_category_coverage"]["missing_action_categories"] == []
+    assert coverage["protocol_detail_domain_coverage"]["culture_parameters"]["status"] in {
+        "pass",
+        "not_reported_in_agent1_structured_input",
+    }
+
+    lossless_audit = json.loads(outputs["lossless_protocol_representation_audit"].read_text(encoding="utf-8"))
+    assert lossless_audit["status"] == "pass"
+    assert lossless_audit["summary"]["n_missing_stage_graph_nodes"] == 0
+    assert lossless_audit["summary"]["n_missing_event_graph_actions"] == 0
+    assert lossless_audit["summary"]["n_missing_event_feature_provenance"] == 0
 
     predefined = json.loads(outputs["predefined_feature_registry"].read_text(encoding="utf-8"))
     assert predefined["schema_version"] == "predefined-feature-registry-v1"
@@ -185,6 +196,298 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
 
     audit = json.loads(outputs["llm_audit_report"].read_text(encoding="utf-8"))
     assert "summary" in audit
+
+
+def test_protocol_analysis_agent_compiles_stage_scoped_feature_specs(tmp_path: Path) -> None:
+    registry = tmp_path / "run_feature_registry.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "features": [
+                    {
+                        "feature_name": "s1_activin_chir_same_stage",
+                        "feature_type": "binary",
+                        "level": "stage",
+                        "biological_category": "stage_scoped_signal_combination",
+                        "rationale": "Activin and CHIR are both present in stage 1.",
+                        "trigger_patterns": ["Activin"],
+                        "value_rule": "co_occurs_within_stage",
+                        "source_fields": ["event.factor_name", "event.evidence_quote"],
+                        "stage_filter": {"stage_index": 1},
+                        "co_occurs_within_stage": ["Activin", "CHIR99021"],
+                        "required_evidence": True,
+                        "confidence": "high",
+                        "proposed_by": "human",
+                        "approved_status": "approved",
+                    },
+                    {
+                        "feature_name": "chir_after_activin_count",
+                        "feature_type": "count",
+                        "level": "operation",
+                        "biological_category": "ordered_signal_program",
+                        "rationale": "Counts CHIR events that occur after Activin.",
+                        "trigger_patterns": ["CHIR99021"],
+                        "value_rule": "conditional_count",
+                        "source_fields": ["event.factor_name", "event.evidence_quote"],
+                        "after_patterns": ["Activin"],
+                        "required_evidence": True,
+                        "confidence": "high",
+                        "proposed_by": "human",
+                        "approved_status": "approved",
+                    },
+                    {
+                        "feature_name": "activin_to_ra_gap_days",
+                        "feature_type": "numeric_sum",
+                        "level": "protocol",
+                        "biological_category": "ordered_signal_timing",
+                        "rationale": "Time from Activin exposure to RA exposure.",
+                        "trigger_patterns": ["Activin"],
+                        "value_rule": "duration_between_events",
+                        "source_fields": ["event.factor_name", "event.evidence_quote"],
+                        "before_patterns": ["Retinoic acid"],
+                        "required_evidence": True,
+                        "confidence": "high",
+                        "proposed_by": "human",
+                        "approved_status": "approved",
+                    },
+                ]
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 2},
+            "stages": [
+                {"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1", "day_start": 0, "day_end": 2},
+                {"stage_id": "s2", "stage_index": 2, "stage_name": "Stage 2", "day_start": 3, "day_end": 5},
+            ],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "day_start": "0",
+            "day_end": "2",
+            "factor_type": "reagent",
+            "factor_name": "Activin A",
+            "standardized_name": "Activin A",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Activin A and CHIR99021 were added.",
+        },
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "day_start": "1",
+            "day_end": "2",
+            "factor_type": "reagent",
+            "factor_name": "CHIR99021",
+            "standardized_name": "CHIR99021",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Activin A and CHIR99021 were added.",
+        },
+        {
+            "protocol_id": "p1",
+            "stage_id": "s2",
+            "stage_index": "2",
+            "day_start": "3",
+            "day_end": "5",
+            "factor_type": "reagent",
+            "factor_name": "Retinoic acid",
+            "standardized_name": "Retinoic acid",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Retinoic acid was added.",
+        },
+    ]
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path / "out",
+        quality_filters={
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+            "run_specific_feature_registry_path": str(registry),
+        },
+    ).run(records, events)
+    row = next(csv.DictReader(outputs["protocol_feature_matrix"].open(encoding="utf-8")))
+
+    assert row["s1_activin_chir_same_stage"] == "1"
+    assert row["chir_after_activin_count"] == "1"
+    assert row["activin_to_ra_gap_days"] == "3.0"
+
+
+def test_protocol_analysis_agent_returns_empty_matrix_when_all_protocols_fail_quality_gate(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": False,
+            "confidence": {"extraction": "low"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1"}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": "Activin A",
+            "standardized_name": "Activin A",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Activin A was added.",
+        }
+    ]
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+        },
+    ).run(records, events, [])
+
+    assert list(csv.DictReader(outputs["protocol_feature_matrix"].open(encoding="utf-8"))) == []
+    quality = json.loads(outputs["protocol_quality_filter_report"].read_text(encoding="utf-8"))
+    assert quality["summary"]["n_passed_quality_filter"] == 0
+    assert quality["event_filter_report"]["n_kept_events"] == 0
+
+
+def test_protocol_analysis_agent_standardizes_concentration_units_before_max(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1"}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": "Protein X",
+            "standardized_name": "Protein X",
+            "concentration_value": "1",
+            "concentration_unit": "mg/mL",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Protein X 1 mg/mL was added.",
+        },
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": "Protein X",
+            "standardized_name": "Protein X",
+            "concentration_value": "100",
+            "concentration_unit": "ug/mL",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Protein X 100 ug/mL was added.",
+        },
+    ]
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "min_protocol_confidence": 0.65,
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+        },
+    ).run(records, events, [])
+    row = next(csv.DictReader(outputs["protocol_feature_matrix"].open(encoding="utf-8")))
+
+    assert row["all_reagent_protein_x_max_concentration"] == "1000.0"
+    assert row["all_reagent_protein_x_max_concentration_unit"] == "ug/ml"
+    assert row["all_reagent_protein_x_concentration_comparability"] == "standardized"
+
+
+def test_feature_spec_co_occurrence_requires_all_trigger_patterns(tmp_path: Path) -> None:
+    registry = tmp_path / "approved_feature_registry.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "features": [
+                    {
+                        "feature_name": "activin_chir_co_occurrence",
+                        "feature_type": "binary",
+                        "level": "protocol",
+                        "biological_category": "signal_combination",
+                        "rationale": "Requires both Activin and CHIR.",
+                        "trigger_patterns": ["Activin", "CHIR99021"],
+                        "value_rule": "co_occurrence",
+                        "source_fields": ["event.factor_name", "event.evidence_quote"],
+                        "required_evidence": True,
+                        "confidence": "high",
+                        "proposed_by": "human",
+                        "approved_status": "approved",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Only Activin", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1"}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": "Activin A",
+            "standardized_name": "Activin A",
+            "validation_status": "evidence_supported",
+            "parse_status": "single_value",
+            "concentration_parse_status": "single_value",
+            "evidence_quote": "Activin A was added.",
+        }
+    ]
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path / "out",
+        quality_filters={
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+            "approved_feature_registry_path": str(registry),
+        },
+    ).run(records, events, [])
+    row = next(csv.DictReader(outputs["protocol_feature_matrix"].open(encoding="utf-8")))
+
+    assert row["activin_chir_co_occurrence"] == "0"
 
 
 def test_protocol_analysis_agent_accepts_mock_llm_for_unknown_factor(tmp_path: Path) -> None:
@@ -492,7 +795,7 @@ def test_approved_feature_specs_are_compiled_by_explicit_dsl(tmp_path: Path) -> 
     ).run(records, events, [])
 
     matrix_rows = list(csv.DictReader(outputs["protocol_feature_matrix"].open(encoding="utf-8")))
-    assert float(matrix_rows[0]["custom_activin_max_concentration"]) == 100
+    assert float(matrix_rows[0]["custom_activin_max_concentration"]) == 0.1
     assert matrix_rows[0]["custom_activin_factor_types"] == "reagent"
     provenance = json.loads(outputs["feature_cell_provenance"].read_text(encoding="utf-8"))
     cell = provenance["final_matrix"]["protocols"]["p1"]["custom_activin_max_concentration"]

@@ -131,7 +131,7 @@ def _discover_llm_feature_specs(
     llm_calls = 0
     for record in protocol_records:
         protocol_id = str(record.get("protocol_id") or (record.get("protocol") or {}).get("protocol_id") or "")
-        if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
             continue
         if llm_calls >= max_protocols:
             break
@@ -147,7 +147,10 @@ def _discover_llm_feature_specs(
                     "Propose protocol-level feature columns for phenotype-relevant protocol design elements. "
                     "Return strict JSON FeatureSpecSet. value_rule must be one executable DSL rule: "
                     "presence, count, min(field), max(field), first_day, last_day, sum_duration, "
-                    "category_set(field), ordered_sequence(field), transition_count, or co_occurrence. "
+                    "category_set(field), ordered_sequence(field), transition_count, co_occurrence, "
+                    "co_occurs_within_stage, conditional_count, or duration_between_events. "
+                    "Use stage_filter, before_patterns, after_patterns, and co_occurs_within_stage when a feature "
+                    "depends on stage scope, ordering, or same-stage combinations. "
                     "Do not provide matrix values."
                 ),
             },
@@ -255,7 +258,7 @@ def _audit_llm_specs_against_source(
     for spec in specs:
         matched_refs: list[dict[str, Any]] = []
         for protocol_id, record in records_by_protocol.items():
-            if accepted_protocol_ids and protocol_id not in accepted_protocol_ids:
+            if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
                 continue
             matched_refs.extend(_matching_refs(spec, record, events_by_protocol.get(protocol_id, [])))
         if matched_refs:
@@ -288,17 +291,23 @@ def _compute_feature_value(
     _validate_feature_rule(feature_type, value_rule)
     if feature_type == "binary":
         if value_rule == "co_occurrence":
-            return int(_has_co_occurrence(spec, refs)), refs
+            return int(_has_all_trigger_patterns(spec, refs)), refs
+        if value_rule == "co_occurs_within_stage":
+            return int(bool(refs)), refs
         return int(bool(refs)), refs
     if feature_type == "count":
         if value_rule == "transition_count":
             return _transition_count(refs), refs
+        if value_rule == "conditional_count":
+            return len(refs), refs
         return len(refs), refs
     if feature_type == "numeric_max":
         return _numeric_aggregate(value_rule, refs, max), refs
     if feature_type == "numeric_min":
         return _numeric_aggregate(value_rule, refs, min), refs
     if feature_type == "numeric_sum":
+        if value_rule == "duration_between_events":
+            return _duration_between_events(spec, record, events), refs
         return _numeric_sum(value_rule, refs), refs
     if feature_type == "categorical":
         if value_rule.startswith("ordered_sequence("):
@@ -314,18 +323,19 @@ def _compute_feature_value(
 def _matching_refs(spec: dict[str, Any], record: dict[str, Any], events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     patterns = [str(pattern).lower() for pattern in spec.get("trigger_patterns", []) if str(pattern).strip()]
     required_evidence = bool(spec.get("required_evidence", True))
+    events = [event for event in events if _matches_stage_filter(event, spec.get("stage_filter", {}))]
     refs = []
     for event in events:
         text = _event_text(event, spec.get("source_fields", []))
         matched = _matched_pattern(text, patterns)
         if matched and (not required_evidence or event.get("evidence_quote")):
             refs.append(_event_ref(event, matched))
-    for stage in record.get("stages") or []:
+    for stage in _filtered_stages(record.get("stages") or [], spec.get("stage_filter", {})):
         text = _stage_text(stage, spec.get("source_fields", []))
         matched = _matched_pattern(text, patterns)
         if matched and (not required_evidence or stage.get("evidence_quote")):
             refs.append(_stage_ref(stage, matched))
-    return refs
+    return _apply_relation_constraints(spec, refs, record, events)
 
 
 def _matched_pattern(text: str, patterns: list[str]) -> str:
@@ -367,8 +377,10 @@ def _stage_text(stage: dict[str, Any], source_fields: list[str] | None = None) -
 def _event_ref(event: dict[str, Any], matched_pattern: str) -> dict[str, Any]:
     return {
         "entity_type": "protocol_factor_event",
+        "event_identity": _event_identity(event),
         "event_id": event.get("event_id") or "",
         "stage_id": event.get("stage_id") or "",
+        "stage_index": event.get("stage_index"),
         "factor_name": event.get("normalized_name") or event.get("standardized_name") or event.get("factor_name") or "",
         "matched_pattern": matched_pattern,
         "quote": event.get("evidence_quote") or "",
@@ -378,6 +390,9 @@ def _event_ref(event: dict[str, Any], matched_pattern: str) -> dict[str, Any]:
         "duration_days": event.get("duration_days"),
         "concentration_value": event.get("concentration_value"),
         "concentration_unit": event.get("concentration_unit"),
+        "concentration_standard_value": event.get("concentration_standard_value"),
+        "concentration_standard_unit": event.get("concentration_standard_unit"),
+        "concentration_comparability_status": event.get("concentration_comparability_status"),
         "factor_type": event.get("factor_type") or "",
         "action_type": event.get("action_type") or "",
         "normalized_family": event.get("normalized_family") or "",
@@ -456,6 +471,10 @@ def _normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
 
+def _is_accepted_protocol(protocol_id: str, accepted_protocol_ids: set[str]) -> bool:
+    return bool(protocol_id) and protocol_id in accepted_protocol_ids
+
+
 class FeatureSpecExecutionError(ValueError):
     pass
 
@@ -463,8 +482,8 @@ class FeatureSpecExecutionError(ValueError):
 def _validate_feature_rule(feature_type: str, value_rule: str) -> None:
     rule = value_rule.strip()
     allowed = {
-        "binary": {"presence", "co_occurrence"},
-        "count": {"count", "transition_count"},
+        "binary": {"presence", "co_occurrence", "co_occurs_within_stage"},
+        "count": {"count", "transition_count", "conditional_count"},
         "numeric_max": {"max(concentration_value)", "max(day_start)", "max(day_end)", "max(duration_days)", "last_day"},
         "numeric_min": {
             "min(concentration_value)",
@@ -473,7 +492,7 @@ def _validate_feature_rule(feature_type: str, value_rule: str) -> None:
             "min(duration_days)",
             "first_day",
         },
-        "numeric_sum": {"sum_duration"},
+        "numeric_sum": {"sum_duration", "duration_between_events"},
         "categorical": {
             "category_set(factor_type)",
             "category_set(action_type)",
@@ -492,6 +511,10 @@ def _validate_feature_rule(feature_type: str, value_rule: str) -> None:
 
 def _numeric_aggregate(value_rule: str, refs: list[dict[str, Any]], aggregate: Any) -> Any:
     field = _rule_field(value_rule)
+    if field == "concentration_value":
+        field = _comparable_concentration_field(refs)
+        if not field:
+            return ""
     if value_rule == "first_day":
         field = "day_start"
     if value_rule == "last_day":
@@ -501,6 +524,16 @@ def _numeric_aggregate(value_rule: str, refs: list[dict[str, Any]], aggregate: A
     if not present_values:
         return ""
     return aggregate(present_values)
+
+
+def _comparable_concentration_field(refs: list[dict[str, Any]]) -> str:
+    standardized_refs = [
+        ref for ref in refs if str(ref.get("concentration_comparability_status") or "") == "standardized"
+    ]
+    if not standardized_refs:
+        return ""
+    units = {str(ref.get("concentration_standard_unit") or "") for ref in standardized_refs}
+    return "concentration_standard_value" if len(units) == 1 else ""
 
 
 def _numeric_sum(value_rule: str, refs: list[dict[str, Any]]) -> Any:
@@ -544,12 +577,6 @@ def _transition_count(refs: list[dict[str, Any]]) -> int:
     return sum(1 for left, right in zip(ordered, ordered[1:], strict=False) if left != right)
 
 
-def _has_co_occurrence(spec: dict[str, Any], refs: list[dict[str, Any]]) -> bool:
-    expected = {_normalize(str(pattern)) for pattern in spec.get("trigger_patterns", []) if str(pattern).strip()}
-    observed = {_normalize(str(ref.get("matched_pattern") or "")) for ref in refs if ref.get("matched_pattern")}
-    return bool(expected) and expected.issubset(observed)
-
-
 def _ordered_matched_patterns(refs: list[dict[str, Any]]) -> list[str]:
     ordered = sorted(
         refs,
@@ -561,6 +588,179 @@ def _ordered_matched_patterns(refs: list[dict[str, Any]]) -> list[str]:
         ),
     )
     return [str(ref.get("matched_pattern") or "") for ref in ordered if ref.get("matched_pattern")]
+
+
+def _has_all_trigger_patterns(spec: dict[str, Any], refs: list[dict[str, Any]]) -> bool:
+    expected = {_normalize(str(pattern)) for pattern in spec.get("trigger_patterns", []) if str(pattern).strip()}
+    observed = {_normalize(str(ref.get("matched_pattern") or "")) for ref in refs if ref.get("matched_pattern")}
+    return bool(expected) and expected.issubset(observed)
+
+
+def _matches_stage_filter(event: dict[str, Any], stage_filter: dict[str, Any] | None) -> bool:
+    if not stage_filter:
+        return True
+    return _matches_exact_filter(event, stage_filter) and _matches_numeric_filter(event, stage_filter)
+
+
+def _filtered_stages(stages: list[dict[str, Any]], stage_filter: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not stage_filter:
+        return stages
+    return [
+        stage
+        for stage in stages
+        if _matches_exact_filter(stage, stage_filter) and _matches_numeric_filter(stage, stage_filter)
+    ]
+
+
+def _matches_exact_filter(row: dict[str, Any], filters: dict[str, Any]) -> bool:
+    for key in ("stage_id", "stage_index", "factor_type", "action_type"):
+        if key not in filters:
+            continue
+        expected = str(filters.get(key) or "")
+        if expected and str(row.get(key) or "") != expected:
+            return False
+    return True
+
+
+def _matches_numeric_filter(row: dict[str, Any], filters: dict[str, Any]) -> bool:
+    numeric_rules = {
+        "day_start_min": ("day_start", lambda actual, expected: actual >= expected),
+        "day_start_max": ("day_start", lambda actual, expected: actual <= expected),
+        "day_end_min": ("day_end", lambda actual, expected: actual >= expected),
+        "day_end_max": ("day_end", lambda actual, expected: actual <= expected),
+        "stage_index_min": ("stage_index", lambda actual, expected: actual >= expected),
+        "stage_index_max": ("stage_index", lambda actual, expected: actual <= expected),
+    }
+    for filter_key, (field, predicate) in numeric_rules.items():
+        if filter_key not in filters:
+            continue
+        actual = _to_float(row.get(field))
+        expected = _to_float(filters.get(filter_key))
+        if actual is None or expected is None or not predicate(actual, expected):
+            return False
+    return True
+
+
+def _apply_relation_constraints(
+    spec: dict[str, Any],
+    refs: list[dict[str, Any]],
+    record: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    refs = _filter_refs_by_relative_patterns(refs, spec.get("before_patterns", []), events, before=True)
+    refs = _filter_refs_by_relative_patterns(refs, spec.get("after_patterns", []), events, before=False)
+    co_patterns = [str(pattern) for pattern in spec.get("co_occurs_within_stage", []) if str(pattern).strip()]
+    if co_patterns or str(spec.get("value_rule") or "") == "co_occurs_within_stage":
+        refs = _filter_refs_by_stage_co_occurrence(
+            refs, co_patterns or spec.get("trigger_patterns", []), record, events
+        )
+    return refs
+
+
+def _filter_refs_by_relative_patterns(
+    refs: list[dict[str, Any]], patterns: list[str], events: list[dict[str, Any]], before: bool
+) -> list[dict[str, Any]]:
+    relation_patterns = [str(pattern) for pattern in patterns if str(pattern).strip()]
+    if not relation_patterns:
+        return refs
+    anchors = [
+        _event_ref(event, _matched_pattern(_event_text(event), relation_patterns))
+        for event in events
+        if _matched_pattern(_event_text(event), relation_patterns)
+    ]
+    if not anchors:
+        return []
+    filtered = []
+    for ref in refs:
+        ref_time = _ref_time(ref)
+        for anchor in anchors:
+            anchor_time = _ref_time(anchor)
+            if ref_time is None or anchor_time is None:
+                continue
+            if (before and ref_time < anchor_time) or (not before and ref_time > anchor_time):
+                filtered.append(ref)
+                break
+    return filtered
+
+
+def _filter_refs_by_stage_co_occurrence(
+    refs: list[dict[str, Any]], patterns: list[str], record: dict[str, Any], events: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    expected = [_normalize(str(pattern)) for pattern in patterns if str(pattern).strip()]
+    if not expected:
+        return refs
+    stage_texts: dict[str, str] = defaultdict(str)
+    for event in events:
+        stage_id = str(event.get("stage_id") or "")
+        if stage_id:
+            stage_texts[stage_id] += " " + _event_text(event)
+    for stage in record.get("stages") or []:
+        stage_id = str(stage.get("stage_id") or "")
+        if stage_id:
+            stage_texts[stage_id] += " " + _stage_text(stage)
+    valid_stage_ids = {
+        stage_id for stage_id, text in stage_texts.items() if all(pattern in _normalize(text) for pattern in expected)
+    }
+    return [ref for ref in refs if str(ref.get("stage_id") or "") in valid_stage_ids]
+
+
+def _duration_between_events(spec: dict[str, Any], record: dict[str, Any], events: list[dict[str, Any]]) -> Any:
+    start_patterns = spec.get("after_patterns") or spec.get("trigger_patterns") or []
+    end_patterns = spec.get("before_patterns") or []
+    if not start_patterns or not end_patterns:
+        raise FeatureSpecExecutionError("duration_between_events requires trigger/after patterns and before_patterns.")
+    source_fields = _anchor_source_fields(spec.get("source_fields", []))
+    starts = _pattern_times(start_patterns, record, events, source_fields)
+    ends = _pattern_times(end_patterns, record, events, source_fields)
+    if not starts or not ends:
+        return ""
+    deltas = [end - start for start in starts for end in ends if end >= start]
+    return min(deltas) if deltas else ""
+
+
+def _pattern_times(
+    patterns: list[str],
+    record: dict[str, Any],
+    events: list[dict[str, Any]],
+    source_fields: list[str] | None,
+) -> list[float]:
+    times = []
+    for event in events:
+        if _matched_pattern(_event_text(event, source_fields), patterns):
+            time = _ref_time(_event_ref(event, ""))
+            if time is not None:
+                times.append(time)
+    for stage in record.get("stages") or []:
+        if _matched_pattern(_stage_text(stage, source_fields), patterns):
+            time = _ref_time(_stage_ref(stage, ""))
+            if time is not None:
+                times.append(time)
+    return times
+
+
+def _anchor_source_fields(source_fields: list[str] | None) -> list[str]:
+    fields = [
+        field
+        for field in source_fields or []
+        if str(field).split(".")[-1] not in {"evidence_quote", "quote", "source_location"}
+    ]
+    return fields or [
+        "event.factor_name",
+        "event.standardized_name",
+        "event.normalized_name",
+        "event.normalized_family",
+        "event.action_type",
+        "event.factor_type",
+        "stage.stage_name",
+    ]
+
+
+def _ref_time(ref: dict[str, Any]) -> float | None:
+    for field in ("day_start", "day_end", "stage_index"):
+        value = _to_float(ref.get(field))
+        if value is not None:
+            return value
+    return None
 
 
 def _rule_field(value_rule: str) -> str:
@@ -593,3 +793,13 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _event_identity(event: dict[str, Any]) -> str:
+    event_id = str(event.get("event_id") or "")
+    if event_id:
+        return event_id
+    return "|".join(
+        str(event.get(key) or "")
+        for key in ("protocol_id", "stage_id", "factor_type", "factor_name", "day_start", "day_end", "operation")
+    )

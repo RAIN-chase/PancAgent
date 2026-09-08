@@ -69,5 +69,5 @@ pretty = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["fastapi", "uvicorn"]
+module = ["anndata", "fastapi", "scipy", "uvicorn"]
 ignore_missing_imports = true

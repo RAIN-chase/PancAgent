@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import csv
 import builtins
+import csv
 import json
 from pathlib import Path
 
 import pytest
-
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
-from protocol_optimization_agent.tools.h5ad_tools import query_gene_expression
 from protocol_optimization_agent.tools.external_data_tools import get_external_data_analysis_tools
+from protocol_optimization_agent.tools.h5ad_tools import compute_differential_expression, query_gene_expression
 
 
 def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
@@ -65,7 +64,7 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
 
     maturity_rows = list(csv.DictReader(outputs["maturity_scores"].open(encoding="utf-8")))
     assert {row["lineage"] for row in maturity_rows} == {"beta", "ductal"}
-    assert {row["status"] for row in maturity_rows} == {"pending"}
+    assert {row["status"] for row in maturity_rows} == {"input_data_pending"}
 
     gene_program_rows = list(csv.DictReader(outputs["gene_program_scores"].open(encoding="utf-8")))
     assert {row["gene_program"] for row in gene_program_rows} == {
@@ -130,6 +129,7 @@ def test_data_analysis_agent_runs_small_h5ad_analysis(tmp_path: Path) -> None:
                 "group_b": "alpha",
                 "genes": ["INS", "GCG"],
             },
+            "expression_scale": "normalized",
             "backed": False,
         },
     ).run(
@@ -147,6 +147,8 @@ def test_data_analysis_agent_runs_small_h5ad_analysis(tmp_path: Path) -> None:
     composition_rows = list(csv.DictReader(outputs["cell_type_composition"].open(encoding="utf-8")))
     beta = next(row for row in composition_rows if row["cell_type"] == "beta")
     assert beta["n_cells"] == "3"
+    assert beta["n_cells_selected"] == "5"
+    assert beta["cell_filter"] == "sample_id=s1;condition_id=baseline"
     assert beta["status"] == "ok"
 
     expression_rows = list(csv.DictReader(outputs["gene_expression_summary"].open(encoding="utf-8")))
@@ -164,6 +166,7 @@ def test_data_analysis_agent_runs_small_h5ad_analysis(tmp_path: Path) -> None:
 
     qc_report = json.loads(outputs["h5ad_qc_report"].read_text(encoding="utf-8"))
     assert qc_report["qc_rows"][0]["analysis_status"] == "ok"
+    assert qc_report["qc_rows"][0]["n_cells_selected"] == 5
     query_contract = json.loads(outputs["data_analysis_query_result"].read_text(encoding="utf-8"))
     assert "differential_expression" in query_contract["supported_operations"]
 
@@ -203,6 +206,66 @@ def test_gene_expression_dependency_missing_fallback(monkeypatch: pytest.MonkeyP
     assert rows[0]["status"] == "dependency_missing"
 
 
+def test_gene_expression_uses_raw_gene_index(tmp_path: Path) -> None:
+    adata_path = _write_raw_reordered_h5ad(tmp_path)
+    rows = query_gene_expression(
+        {
+            "protocol_id": "p1",
+            "dataset_id": "d1",
+            "sample_id": "s1",
+            "condition_id": "baseline",
+            "h5ad_path": str(adata_path),
+        },
+        {"use_raw": True, "backed": False},
+        ["INS"],
+    )
+
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["expression_source"] == "raw.X"
+    assert rows[0]["mean_expression"] == 5.0
+
+
+def test_gene_expression_reports_missing_layer(tmp_path: Path) -> None:
+    adata_path = _write_synthetic_h5ad(tmp_path)
+    rows = query_gene_expression(
+        {
+            "protocol_id": "p1",
+            "dataset_id": "d1",
+            "sample_id": "s1",
+            "condition_id": "baseline",
+            "h5ad_path": str(adata_path),
+        },
+        {"layer": "missing_layer", "backed": False},
+        ["INS"],
+    )
+
+    assert rows[0]["status"] == "expression_source_missing"
+    assert "missing_layer" in rows[0]["message"]
+
+
+def test_differential_expression_log_scale_uses_mean_difference_only(tmp_path: Path) -> None:
+    adata_path = _write_synthetic_h5ad(tmp_path)
+    rows = compute_differential_expression(
+        {
+            "protocol_id": "p1",
+            "dataset_id": "d1",
+            "sample_id": "s1",
+            "condition_id": "baseline",
+            "h5ad_path": str(adata_path),
+        },
+        {"expression_scale": "log", "backed": False},
+        groupby="cell_type",
+        group_a="beta",
+        group_b="alpha",
+        genes=["INS"],
+    )
+
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["mean_diff"] != ""
+    assert rows[0]["log2_fold_change"] == ""
+    assert rows[0]["effect_size_type"] == "mean_difference_only_expression_scale_not_fold_change_compatible"
+
+
 def _write_synthetic_h5ad(tmp_path: Path) -> Path:
     ad = pytest.importorskip("anndata")
     np = pytest.importorskip("numpy")
@@ -223,11 +286,40 @@ def _write_synthetic_h5ad(tmp_path: Path) -> Path:
             "cell_type": ["beta", "beta", "beta", "alpha", "alpha", "ductal"],
             "batch": ["b1", "b1", "b2", "b1", "b2", "b2"],
             "lineage": ["endocrine", "endocrine", "endocrine", "endocrine", "endocrine", "ductal"],
+            "sample_id": ["s1", "s1", "s1", "s1", "s1", "s2"],
+            "condition_id": ["baseline", "baseline", "baseline", "baseline", "baseline", "baseline"],
         },
         index=[f"cell{i}" for i in range(x.shape[0])],
     )
     var = pd.DataFrame(index=["INS", "IAPP", "GCG", "SOX9"])
     adata = ad.AnnData(X=x, obs=obs, var=var)
     path = tmp_path / "synthetic.h5ad"
+    adata.write_h5ad(path)
+    return path
+
+
+def _write_raw_reordered_h5ad(tmp_path: Path) -> Path:
+    ad = pytest.importorskip("anndata")
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+
+    obs = pd.DataFrame(
+        {
+            "sample_id": ["s1", "s1"],
+            "condition_id": ["baseline", "baseline"],
+        },
+        index=["cell0", "cell1"],
+    )
+    adata = ad.AnnData(
+        X=np.array([[100.0, 0.0], [200.0, 0.0]]),
+        obs=obs,
+        var=pd.DataFrame(index=["INS", "IAPP"]),
+    )
+    adata.raw = ad.AnnData(
+        X=np.array([[1.0, 5.0, 9.0], [1.0, 5.0, 9.0]]),
+        obs=obs.copy(),
+        var=pd.DataFrame(index=["GCG", "INS", "IAPP"]),
+    )
+    path = tmp_path / "raw_reordered.h5ad"
     adata.write_h5ad(path)
     return path

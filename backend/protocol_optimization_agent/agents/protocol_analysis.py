@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections import Counter, defaultdict
 from itertools import combinations
 from pathlib import Path
@@ -153,6 +154,9 @@ class ProtocolAnalysisState(TypedDict, total=False):
     feature_cell_provenance: dict[str, Any]
     feature_discovery_audit_report: dict[str, Any]
     quantification_coverage_report: dict[str, Any]
+    lossless_protocol_representation_audit: dict[str, Any]
+    field_quantification_map: dict[str, Any]
+    matrix_release_gate_report: dict[str, Any]
     predefined_feature_registry: dict[str, Any]
     approved_feature_registry: dict[str, Any]
     similarity_rows: list[dict[str, Any]]
@@ -344,6 +348,28 @@ class ProtocolAnalysisAgent:
             workflow_graphs,
             state.get("accepted_protocol_ids", set()),
         )
+        lossless_audit = _build_lossless_protocol_representation_audit(
+            state.get("protocol_records", []),
+            state.get("factor_events", []),
+            state.get("analysis_events", []),
+            state.get("event_filter_report", {}),
+            feature_provenance,
+            workflow_graphs,
+            state.get("accepted_protocol_ids", set()),
+        )
+        field_quantification_map = _build_field_quantification_map(
+            state.get("protocol_records", []),
+            state.get("analysis_events", []),
+            feature_provenance,
+            workflow_graphs,
+            state.get("accepted_protocol_ids", set()),
+        )
+        matrix_release_gate_report = _build_matrix_release_gate_report(
+            quantification_coverage_report,
+            lossless_audit,
+            field_quantification_map,
+            self.quality_filters,
+        )
         return {
             **state,
             "stage_rows": stage_rows,
@@ -356,6 +382,9 @@ class ProtocolAnalysisAgent:
             "workflow_graphs": workflow_graphs,
             "knowledge_graph": knowledge_graph,
             "standardized_protocols": standardized_protocols,
+            "lossless_protocol_representation_audit": lossless_audit,
+            "field_quantification_map": field_quantification_map,
+            "matrix_release_gate_report": matrix_release_gate_report,
             "step_log": _append_step(state, "cross_protocol_feature_matrix"),
         }
 
@@ -379,6 +408,28 @@ class ProtocolAnalysisAgent:
             final_rows,
             final_feature_provenance,
         )
+        lossless_audit = _build_lossless_protocol_representation_audit(
+            state.get("protocol_records", []),
+            state.get("factor_events", []),
+            state.get("analysis_events", []),
+            state.get("event_filter_report", {}),
+            final_feature_provenance,
+            state.get("workflow_graphs", {}),
+            state.get("accepted_protocol_ids", set()),
+        )
+        field_quantification_map = _build_field_quantification_map(
+            state.get("protocol_records", []),
+            state.get("analysis_events", []),
+            final_feature_provenance,
+            state.get("workflow_graphs", {}),
+            state.get("accepted_protocol_ids", set()),
+        )
+        matrix_release_gate_report = _build_matrix_release_gate_report(
+            quantification_coverage_report,
+            lossless_audit,
+            field_quantification_map,
+            self.quality_filters,
+        )
         return {
             **state,
             "feature_rows": final_rows,
@@ -388,6 +439,9 @@ class ProtocolAnalysisAgent:
             "approved_feature_registry": approved_registry,
             "feature_discovery_audit_report": discovery_report,
             "quantification_coverage_report": quantification_coverage_report,
+            "lossless_protocol_representation_audit": lossless_audit,
+            "field_quantification_map": field_quantification_map,
+            "matrix_release_gate_report": matrix_release_gate_report,
             "predefined_feature_registry": state.get("predefined_feature_registry", {}),
             "step_log": _append_step(state, "feature_discovery"),
         }
@@ -472,9 +526,19 @@ class ProtocolAnalysisAgent:
         write_csv_dicts(outputs["protocol_candidate_feature_matrix"], state.get("candidate_feature_rows", []))
         write_json(outputs["feature_cell_provenance"], state.get("feature_cell_provenance", {}))
         write_json(outputs["feature_discovery_audit_report"], state.get("feature_discovery_audit_report", {}))
-        write_csv_dicts(outputs["protocol_feature_matrix"], state.get("feature_rows", []))
         write_json(outputs["protocol_feature_provenance"], state.get("feature_provenance", {}))
         write_json(outputs["quantification_coverage_report"], state.get("quantification_coverage_report", {}))
+        write_json(
+            outputs["lossless_protocol_representation_audit"],
+            state.get("lossless_protocol_representation_audit", {}),
+        )
+        write_json(outputs["field_quantification_map"], state.get("field_quantification_map", {}))
+        release_gate = state.get("matrix_release_gate_report", {})
+        write_json(outputs["matrix_release_gate_report"], release_gate)
+        write_csv_dicts(
+            outputs["protocol_feature_matrix"],
+            state.get("feature_rows", []) if release_gate.get("status") != "blocked" else [],
+        )
         write_csv_dicts(outputs["protocol_similarity_matrix"], state.get("similarity_rows", []))
         write_json(outputs["protocol_relationship_report"], state.get("relationship_report", {}))
         write_csv_dicts(outputs["protocol_embedding"], state.get("embeddings", []))
@@ -507,6 +571,9 @@ class ProtocolAnalysisAgent:
             "protocol_feature_matrix": self.output_dir / "protocol_feature_matrix.csv",
             "protocol_feature_provenance": self.output_dir / "protocol_feature_provenance.json",
             "quantification_coverage_report": self.output_dir / "quantification_coverage_report.json",
+            "lossless_protocol_representation_audit": self.output_dir / "lossless_protocol_representation_audit.json",
+            "field_quantification_map": self.output_dir / "field_quantification_map.json",
+            "matrix_release_gate_report": self.output_dir / "matrix_release_gate_report.json",
             "protocol_similarity_matrix": self.output_dir / "protocol_similarity_matrix.csv",
             "protocol_relationship_report": self.output_dir / "protocol_relationship_report.json",
             "protocol_embedding": self.output_dir / "protocol_embedding.csv",
@@ -572,7 +639,7 @@ class ProtocolAnalysisAgent:
         rejected: Counter[str] = Counter()
         for event in factor_events:
             protocol_id = str(event.get("protocol_id") or "")
-            if accepted_protocol_ids and protocol_id not in accepted_protocol_ids:
+            if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
                 rejected["protocol_failed_quality_filter"] += 1
                 continue
             validation_status = str(event.get("validation_status") or "").strip()
@@ -689,7 +756,7 @@ def _build_temporal_annotations(
     for record in protocol_records:
         protocol = record.get("protocol") or {}
         protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
-        if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
             continue
         for stage in record.get("stages") or []:
             stage_id = str(stage.get("stage_id") or "")
@@ -916,6 +983,7 @@ def _build_analysis_events(
         merged["analysis_event_source"] = (
             "normalized_factor_events" if normalized else "filtered_protocol_factor_events"
         )
+        merged.update(_standardized_concentration_fields(merged))
         analysis_events.append(merged)
     return analysis_events
 
@@ -977,12 +1045,13 @@ def _build_protocol_feature_matrix(
     source_by_protocol = {
         row["protocol_id"]: row for row in source_report.get("protocol_source_checks", []) if row.get("protocol_id")
     }
+    reagent_feature_keys = _reagent_feature_key_map(events)
 
     dynamic_feature_keys: set[str] = set()
     partial_rows: list[dict[str, Any]] = []
     provenance: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(dict)
     for protocol_id in sorted(set(record_by_protocol).union(by_protocol)):
-        if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
             continue
         record = record_by_protocol.get(protocol_id, {})
         protocol = record.get("protocol") or {}
@@ -1000,13 +1069,15 @@ def _build_protocol_feature_matrix(
         _add_temporal_features(row, protocol, stages, protocol_events, provenance[protocol_id])
         _add_action_and_operation_features(row, protocol_events, stages, provenance[protocol_id])
         _add_reagent_family_features(row, protocol_events, provenance[protocol_id])
-        _add_all_reagent_identity_features(row, protocol_events, provenance[protocol_id])
+        _add_all_reagent_identity_features(row, protocol_events, provenance[protocol_id], reagent_feature_keys)
         _add_factor_type_features(row, protocol_events, provenance[protocol_id])
         _add_action_category_features(row, protocol_events, stages, provenance[protocol_id])
         _add_normalized_factor_features(row, protocol_events, provenance[protocol_id])
         _add_semantic_strategy_features(row, semantic_annotations or [], protocol_id, provenance[protocol_id])
         _add_order_features(row, protocol_events, provenance[protocol_id])
-        _add_graph_sequence_and_topology_features(row, protocol_events, stages, provenance[protocol_id])
+        _add_graph_sequence_and_topology_features(
+            row, protocol_events, stages, provenance[protocol_id], reagent_feature_keys
+        )
         _add_dependency_features(row, protocol_events, stages, provenance[protocol_id])
         dynamic_feature_keys.update(key for key in row if key not in _metadata_columns())
         partial_rows.append(row)
@@ -1100,9 +1171,21 @@ def _add_reagent_family_features(
         row[f"{prefix}_total_exposure"] = round(_total_exposure_days(family_events), 3)
         row[f"{prefix}_start_day"] = _blank_if_none(_min_numeric(family_events, "day_start"))
         row[f"{prefix}_end_day"] = _blank_if_none(_max_numeric(family_events, "day_end"))
-        row[f"{prefix}_max_concentration"] = _blank_if_none(_max_numeric(family_events, "concentration_value"))
+        max_concentration, concentration_unit, concentration_status = _max_comparable_concentration(family_events)
+        row[f"{prefix}_max_concentration"] = _blank_if_none(max_concentration)
+        row[f"{prefix}_max_concentration_unit"] = concentration_unit
+        row[f"{prefix}_concentration_comparability"] = concentration_status
         refs = [_event_ref(event) for event in family_events[:20]]
-        for suffix in ("presence", "n_events", "total_exposure", "start_day", "end_day", "max_concentration"):
+        for suffix in (
+            "presence",
+            "n_events",
+            "total_exposure",
+            "start_day",
+            "end_day",
+            "max_concentration",
+            "max_concentration_unit",
+            "concentration_comparability",
+        ):
             provenance[f"{prefix}_{suffix}"] = refs
 
 
@@ -1110,12 +1193,13 @@ def _add_all_reagent_identity_features(
     row: dict[str, Any],
     events: list[dict[str, Any]],
     provenance: dict[str, list[dict[str, Any]]],
+    reagent_feature_keys: dict[str, str],
 ) -> None:
     reagent_events_by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
         if str(event.get("factor_type") or "") != "reagent":
             continue
-        reagent_name = _feature_name(_factor_name(event))
+        reagent_name = _event_reagent_feature_key(event, reagent_feature_keys)
         if reagent_name:
             reagent_events_by_name[reagent_name].append(event)
 
@@ -1126,9 +1210,21 @@ def _add_all_reagent_identity_features(
         row[f"{prefix}_total_exposure"] = round(_total_exposure_days(reagent_events), 3)
         row[f"{prefix}_start_day"] = _blank_if_none(_min_numeric(reagent_events, "day_start"))
         row[f"{prefix}_end_day"] = _blank_if_none(_max_numeric(reagent_events, "day_end"))
-        row[f"{prefix}_max_concentration"] = _blank_if_none(_max_numeric(reagent_events, "concentration_value"))
+        max_concentration, concentration_unit, concentration_status = _max_comparable_concentration(reagent_events)
+        row[f"{prefix}_max_concentration"] = _blank_if_none(max_concentration)
+        row[f"{prefix}_max_concentration_unit"] = concentration_unit
+        row[f"{prefix}_concentration_comparability"] = concentration_status
         refs = [_event_ref(event) for event in reagent_events]
-        for suffix in ("presence", "n_events", "total_exposure", "start_day", "end_day", "max_concentration"):
+        for suffix in (
+            "presence",
+            "n_events",
+            "total_exposure",
+            "start_day",
+            "end_day",
+            "max_concentration",
+            "max_concentration_unit",
+            "concentration_comparability",
+        ):
             provenance[f"{prefix}_{suffix}"] = refs
 
 
@@ -1269,6 +1365,7 @@ def _add_graph_sequence_and_topology_features(
     events: list[dict[str, Any]],
     stages: list[dict[str, Any]],
     provenance: dict[str, list[dict[str, Any]]],
+    reagent_feature_keys: dict[str, str],
 ) -> None:
     ordered_events = _ordered_events(events)
     stage_ids = {str(stage.get("stage_id") or "") for stage in stages if stage.get("stage_id")}
@@ -1276,14 +1373,16 @@ def _add_graph_sequence_and_topology_features(
     reagent_events = [
         event
         for event in ordered_events
-        if str(event.get("factor_type") or "") == "reagent" and _feature_name(_factor_name(event))
+        if str(event.get("factor_type") or "") == "reagent" and _event_reagent_feature_key(event, reagent_feature_keys)
     ]
     action_labels = [_feature_name(_operation_label(event)) for event in ordered_events]
     factor_types = [_feature_name(str(event.get("factor_type") or "unknown")) for event in ordered_events]
 
     row["graph_n_stage_nodes"] = len(stage_ids or event_stage_ids)
     row["graph_n_action_nodes"] = len(ordered_events)
-    row["graph_n_reagent_item_nodes"] = len({_feature_name(_factor_name(event)) for event in reagent_events})
+    row["graph_n_reagent_item_nodes"] = len(
+        {_event_reagent_feature_key(event, reagent_feature_keys) for event in reagent_events}
+    )
     row["graph_n_event_edges"] = len(ordered_events)
     row["graph_n_next_action_edges"] = max(len(ordered_events) - 1, 0)
     row["graph_n_next_stage_edges"] = max(row["graph_n_stage_nodes"] - 1, 0)
@@ -1320,7 +1419,7 @@ def _add_graph_sequence_and_topology_features(
         row[feature] = row.get(feature, 0) + 1
     _attach_adjacent_pair_provenance("factor_type_bigram", factor_types, ordered_events, provenance)
 
-    reagent_labels = [_feature_name(_factor_name(event)) for event in reagent_events]
+    reagent_labels = [_event_reagent_feature_key(event, reagent_feature_keys) for event in reagent_events]
     for previous, current in zip(reagent_labels, reagent_labels[1:], strict=False):
         if not previous or not current:
             continue
@@ -1330,7 +1429,7 @@ def _add_graph_sequence_and_topology_features(
 
     for event in reagent_events:
         action = _feature_name(_operation_label(event))
-        reagent = _feature_name(_factor_name(event))
+        reagent = _event_reagent_feature_key(event, reagent_feature_keys)
         if not action or not reagent:
             continue
         feature = f"motif_action_{action}_uses_reagent_{reagent}"
@@ -1443,11 +1542,13 @@ def _build_quantification_coverage_report(
     feature_provenance: dict[str, Any],
 ) -> dict[str, Any]:
     matrix_columns = set(feature_rows[0]) if feature_rows else set()
+    reagent_feature_keys = _reagent_feature_key_map(events)
     reagent_names = sorted(
         {
-            _feature_name(_factor_name(event))
+            _event_reagent_feature_key(event, reagent_feature_keys)
             for event in events
-            if str(event.get("factor_type") or "") == "reagent" and _feature_name(_factor_name(event))
+            if str(event.get("factor_type") or "") == "reagent"
+            and _event_reagent_feature_key(event, reagent_feature_keys)
         }
     )
     reagent_labels_by_feature: dict[str, set[str]] = defaultdict(set)
@@ -1455,7 +1556,7 @@ def _build_quantification_coverage_report(
         if str(event.get("factor_type") or "") != "reagent":
             continue
         label = _factor_name(event)
-        feature_key = _feature_name(label)
+        feature_key = _event_reagent_feature_key(event, reagent_feature_keys)
         if feature_key:
             reagent_labels_by_feature[feature_key].add(label)
     reagent_name_collisions = {
@@ -1496,6 +1597,7 @@ def _build_quantification_coverage_report(
         category for category in action_categories if f"action_category_{category}_presence" not in matrix_columns
     ]
     provenance_protocols = feature_provenance.get("protocols", {}) if isinstance(feature_provenance, dict) else {}
+    domain_coverage = _build_protocol_detail_domain_coverage(events, provenance_protocols)
     missing_provenance_columns = sorted(
         column
         for column in matrix_columns
@@ -1544,14 +1646,81 @@ def _build_quantification_coverage_report(
             "missing_action_categories": missing_action_categories,
             "uncategorized_action_events": uncategorized_action_events[:100],
         },
+        "protocol_detail_domain_coverage": domain_coverage,
         "missing_provenance_columns": missing_provenance_columns,
     }
+
+
+def _build_protocol_detail_domain_coverage(
+    events: list[dict[str, Any]],
+    provenance_protocols: dict[str, Any],
+) -> dict[str, Any]:
+    event_ids_with_provenance = _provenance_event_ids(provenance_protocols)
+    domains: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in events:
+        event_domains = _protocol_detail_domains(event)
+        for domain in event_domains:
+            domains[domain].append(event)
+    report: dict[str, Any] = {}
+    for domain, domain_events in sorted(domains.items()):
+        event_ids = {_event_identity(event) for event in domain_events}
+        missing_ids = sorted(event_ids - event_ids_with_provenance)
+        report[domain] = {
+            "n_events": len(domain_events),
+            "n_unique_event_ids": len(event_ids),
+            "n_events_without_feature_provenance": len(missing_ids),
+            "missing_event_ids": missing_ids[:200],
+            "status": "pass" if not missing_ids else "fail",
+        }
+    for domain in (
+        "culture_parameters",
+        "physical_conditions",
+        "cell_handling",
+        "qc_or_readout",
+        "transplantation",
+    ):
+        report.setdefault(
+            domain,
+            {
+                "n_events": 0,
+                "n_unique_event_ids": 0,
+                "n_events_without_feature_provenance": 0,
+                "missing_event_ids": [],
+                "status": "not_reported_in_agent1_structured_input",
+            },
+        )
+    return report
+
+
+def _protocol_detail_domains(event: dict[str, Any]) -> set[str]:
+    factor_type = str(event.get("factor_type") or "")
+    action_type = _operation_label(event)
+    text = _event_text(event).lower()
+    domains: set[str] = set()
+    if factor_type in {"medium_base", "matrix_or_coating", "culture_format"}:
+        domains.add("culture_parameters")
+    if factor_type in {"mechanical_condition", "oxygen_condition"} or any(
+        token in text for token in ("oxygen", "hypoxia", "normoxia", "shak", "spinner", "bioreactor", "air-liquid")
+    ):
+        domains.add("physical_conditions")
+    if factor_type in {"aggregation", "sorting", "cell_state_transition"} or action_type in {
+        "dissociate",
+        "transfer_or_seed",
+        "aggregate",
+    }:
+        domains.add("cell_handling")
+    if factor_type in {"qc_marker", "assay"} or "assay_or_qc" in _action_categories_for_text(text, event):
+        domains.add("qc_or_readout")
+    if factor_type == "transplantation" or "transplantation" in _action_categories_for_text(text, event):
+        domains.add("transplantation")
+    return domains
 
 
 def _build_predefined_quantification_registry(events: list[dict[str, Any]]) -> dict[str, Any]:
     reagent_labels_by_feature: dict[str, set[str]] = defaultdict(set)
     factor_types: set[str] = set()
     action_categories: set[str] = set()
+    reagent_feature_keys = _reagent_feature_key_map(events)
     for event in events:
         factor_type_raw = str(event.get("factor_type") or "unknown")
         factor_type = _feature_name(factor_type_raw)
@@ -1559,7 +1728,7 @@ def _build_predefined_quantification_registry(events: list[dict[str, Any]]) -> d
             factor_types.add(factor_type)
         if factor_type_raw == "reagent":
             reagent_name = _factor_name(event)
-            reagent_key = _feature_name(reagent_name)
+            reagent_key = _event_reagent_feature_key(event, reagent_feature_keys)
             if reagent_key:
                 reagent_labels_by_feature[reagent_key].add(reagent_name)
         action_categories.update(_action_categories_for_text(_event_text(event), event))
@@ -1696,6 +1865,8 @@ def _build_predefined_quantification_registry(events: list[dict[str, Any]]) -> d
                     "start_day",
                     "end_day",
                     "max_concentration",
+                    "max_concentration_unit",
+                    "concentration_comparability",
                 ],
             },
             {
@@ -1759,7 +1930,7 @@ def _build_protocol_workflow_graphs(
     for record in protocol_records:
         protocol = record.get("protocol") or {}
         protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
-        if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
             continue
         nodes: dict[str, dict[str, Any]] = {}
         edges: list[dict[str, Any]] = []
@@ -1817,6 +1988,7 @@ def _build_protocol_workflow_graphs(
             nodes[action_id] = {
                 "id": action_id,
                 "type": "action",
+                "source_event_identity": _event_identity(event),
                 "label": operation_label,
                 "action_class": _uwl_action_class(operation_label),
                 "factor_type": event.get("factor_type"),
@@ -1883,7 +2055,7 @@ def _build_protocol_knowledge_graph(
     for record in protocol_records:
         protocol = record.get("protocol") or {}
         protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
-        if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
             continue
         paper_id = str(record.get("paper_id") or protocol.get("paper_id") or "")
         nodes[protocol_id] = {
@@ -2025,7 +2197,7 @@ def _build_standardized_protocol_representations(
     for record in protocol_records:
         protocol = record.get("protocol") or {}
         protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
-        if not protocol_id or (accepted_protocol_ids and protocol_id not in accepted_protocol_ids):
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
             continue
         stage_representations = []
         for stage in sorted(
@@ -2062,6 +2234,290 @@ def _build_standardized_protocol_representations(
             }
         )
     return records
+
+
+def _build_lossless_protocol_representation_audit(
+    protocol_records: list[dict[str, Any]],
+    input_events: list[dict[str, Any]],
+    analysis_events: list[dict[str, Any]],
+    event_filter_report: dict[str, Any],
+    feature_provenance: dict[str, Any],
+    workflow_graphs: dict[str, Any],
+    accepted_protocol_ids: set[str],
+) -> dict[str, Any]:
+    graph_protocols = workflow_graphs.get("protocols", {}) if isinstance(workflow_graphs, dict) else {}
+    provenance_protocols = feature_provenance.get("protocols", {}) if isinstance(feature_provenance, dict) else {}
+    analysis_event_ids = {_event_identity(event) for event in analysis_events}
+    accepted_stage_ids = _accepted_stage_ids(protocol_records, accepted_protocol_ids)
+    graph_stage_ids = _graph_node_ids_by_type(graph_protocols, "stage")
+    graph_action_event_ids = _graph_action_event_ids(graph_protocols)
+    provenance_event_ids = _provenance_event_ids(provenance_protocols)
+    accepted_event_ids = {_event_identity(event) for event in analysis_events}
+    input_event_ids = {_event_identity(event) for event in input_events}
+    filtered_out_event_ids = sorted(input_event_ids - analysis_event_ids)
+    missing_stage_graph_ids = sorted(accepted_stage_ids - graph_stage_ids)
+    missing_event_graph_ids = sorted(accepted_event_ids - graph_action_event_ids)
+    missing_event_provenance_ids = sorted(accepted_event_ids - provenance_event_ids)
+    status = (
+        "pass" if not (missing_stage_graph_ids or missing_event_graph_ids or missing_event_provenance_ids) else "fail"
+    )
+    return {
+        "schema_version": "lossless-protocol-representation-audit-v1",
+        "status": status,
+        "scope": "accepted_filtered_analysis_events_only",
+        "absence_semantics": {
+            "covered": "The accepted Agent1 entity is represented in graph and/or feature provenance.",
+            "not_reported_in_agent1_structured_input": (
+                "No accepted Agent1 stage/event exists for this concept; with Agent1 assumed complete, treat as not given "
+                "by the source protocol, not as a PA recovery target."
+            ),
+            "excluded_by_quality_or_schema_filter": (
+                "Agent1 emitted an event, but PA excluded it from quantitative analysis because quality, schema, parse, "
+                "validation, or evidence filters rejected it."
+            ),
+            "possible_agent1_or_filter_gap": (
+                "Use only when source evidence coverage is low or filtered-out event counts are high; PA cannot infer this "
+                "from final matrix absence alone."
+            ),
+        },
+        "summary": {
+            "n_accepted_stages": len(accepted_stage_ids),
+            "n_accepted_analysis_events": len(accepted_event_ids),
+            "n_input_events": len(input_event_ids),
+            "n_filtered_out_events": len(filtered_out_event_ids),
+            "n_missing_stage_graph_nodes": len(missing_stage_graph_ids),
+            "n_missing_event_graph_actions": len(missing_event_graph_ids),
+            "n_missing_event_feature_provenance": len(missing_event_provenance_ids),
+            "event_filter_report": event_filter_report,
+        },
+        "missing_stage_graph_ids": missing_stage_graph_ids[:200],
+        "missing_event_graph_ids": missing_event_graph_ids[:200],
+        "missing_event_provenance_ids": missing_event_provenance_ids[:200],
+        "filtered_out_event_ids": filtered_out_event_ids[:500],
+    }
+
+
+def _build_field_quantification_map(
+    protocol_records: list[dict[str, Any]],
+    analysis_events: list[dict[str, Any]],
+    feature_provenance: dict[str, Any],
+    workflow_graphs: dict[str, Any],
+    accepted_protocol_ids: set[str],
+) -> dict[str, Any]:
+    provenance_protocols = feature_provenance.get("protocols", {}) if isinstance(feature_provenance, dict) else {}
+    graph_protocols = workflow_graphs.get("protocols", {}) if isinstance(workflow_graphs, dict) else {}
+    graph_event_ids = _graph_action_event_ids(graph_protocols)
+    provenance_index = _feature_targets_by_event_identity(provenance_protocols)
+    field_rows = []
+    status_counts: Counter[str] = Counter()
+    critical_failures = []
+    for event in analysis_events:
+        protocol_id = str(event.get("protocol_id") or "")
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
+            continue
+        event_identity = _event_identity(event)
+        mapped_features = sorted(provenance_index.get(event_identity, set()))
+        field_mappings = _event_field_mappings(event, event_identity in graph_event_ids, mapped_features)
+        row = {
+            "protocol_id": protocol_id,
+            "stage_id": event.get("stage_id") or "",
+            "event_identity": event_identity,
+            "field_mappings": field_mappings,
+        }
+        row_statuses = {item["conversion_status"] for item in field_mappings}
+        row["status"] = "blocked" if "not_quantified" in row_statuses else "pass"
+        status_counts[str(row["status"])] += 1
+        if row["status"] == "blocked":
+            critical_failures.append(row)
+        field_rows.append(row)
+    accepted_protocol_count = len(
+        {
+            str(record.get("protocol_id") or (record.get("protocol") or {}).get("protocol_id") or "")
+            for record in protocol_records
+            if _is_accepted_protocol(
+                str(record.get("protocol_id") or (record.get("protocol") or {}).get("protocol_id") or ""),
+                accepted_protocol_ids,
+            )
+        }
+    )
+    return {
+        "schema_version": "field-quantification-map-v1",
+        "scope": "accepted_filtered_analysis_events_only",
+        "status": "pass" if not critical_failures else "fail",
+        "summary": {
+            "n_accepted_protocols": accepted_protocol_count,
+            "n_events_checked": len(field_rows),
+            "status_counts": dict(status_counts),
+            "n_critical_failures": len(critical_failures),
+        },
+        "field_rows": field_rows,
+        "critical_failures": critical_failures[:200],
+    }
+
+
+def _feature_targets_by_event_identity(provenance_protocols: dict[str, Any]) -> dict[str, set[str]]:
+    targets: dict[str, set[str]] = defaultdict(set)
+    for protocol_provenance in provenance_protocols.values():
+        if not isinstance(protocol_provenance, dict):
+            continue
+        for feature, refs in protocol_provenance.items():
+            if not isinstance(refs, list):
+                continue
+            for ref in refs:
+                event_identity = str(ref.get("event_identity") or ref.get("event_id") or "")
+                if event_identity:
+                    targets[event_identity].add(str(feature))
+    return targets
+
+
+def _event_field_mappings(
+    event: dict[str, Any],
+    in_graph: bool,
+    mapped_features: list[str],
+) -> list[dict[str, Any]]:
+    has_feature_mapping = bool(mapped_features)
+    mappings = [
+        _field_mapping("event", event, "factor_type", ["factor_type_*"], has_feature_mapping),
+        _field_mapping("event", event, "factor_name", ["all_reagent_*", "motif_action_*"], has_feature_mapping),
+        _field_mapping("event", event, "operation", ["action_category_*", "action_bigram_*"], has_feature_mapping),
+        _field_mapping("event", event, "day_start", ["*_start_day", "graph_sequence"], has_feature_mapping),
+        _field_mapping("event", event, "day_end", ["*_end_day", "graph_sequence"], has_feature_mapping),
+        _field_mapping("event", event, "duration_days", ["*_total_exposure"], has_feature_mapping),
+        _field_mapping("event", event, "concentration_value", ["*_max_concentration"], has_feature_mapping),
+    ]
+    mappings.append(
+        {
+            "source_path": "workflow_graph.action_node",
+            "source_value": _event_identity(event),
+            "target_columns": ["protocol_workflow_graphs.nodes"],
+            "conversion_rule": "event_to_action_node",
+            "conversion_status": "mapped" if in_graph else "not_quantified",
+        }
+    )
+    for mapping in mappings:
+        mapping["evidence_quote"] = event.get("evidence_quote") or ""
+        mapping["target_feature_candidates"] = mapped_features[:50]
+    return mappings
+
+
+def _field_mapping(
+    entity: str,
+    event: dict[str, Any],
+    field: str,
+    target_columns: list[str],
+    has_feature_mapping: bool,
+) -> dict[str, Any]:
+    value = event.get(field)
+    status = "not_reported_in_agent1_structured_input" if value in (None, "") else "mapped"
+    if field == "concentration_value" and value not in (None, ""):
+        status = (
+            "standardized" if event.get("concentration_comparability_status") == "standardized" else "not_comparable"
+        )
+    if value not in (None, "") and not has_feature_mapping:
+        status = "not_quantified"
+    return {
+        "source_path": f"{entity}.{field}",
+        "source_value": value if value is not None else "",
+        "target_columns": target_columns,
+        "conversion_rule": _field_conversion_rule(field),
+        "conversion_status": status,
+    }
+
+
+def _field_conversion_rule(field: str) -> str:
+    rules = {
+        "factor_type": "factor_type_presence_count_timing",
+        "factor_name": "canonical_reagent_identity_features",
+        "operation": "action_category_and_sequence_features",
+        "day_start": "temporal_min_and_sequence_sort",
+        "day_end": "temporal_max_and_exposure_window",
+        "duration_days": "exposure_sum_when_interval_available",
+        "concentration_value": "standardize_unit_then_compare_within_standard_unit",
+    }
+    return rules.get(field, "direct_projection")
+
+
+def _build_matrix_release_gate_report(
+    quantification_coverage_report: dict[str, Any],
+    lossless_audit: dict[str, Any],
+    field_quantification_map: dict[str, Any],
+    quality_filters: dict[str, Any],
+) -> dict[str, Any]:
+    enforce = bool(quality_filters.get("enforce_matrix_release_gate", True))
+    failures = []
+    if quantification_coverage_report.get("status") != "pass":
+        failures.append("quantification_coverage_report_failed")
+    if lossless_audit.get("status") != "pass":
+        failures.append("lossless_protocol_representation_audit_failed")
+    if field_quantification_map.get("status") != "pass":
+        failures.append("field_quantification_map_failed")
+    return {
+        "schema_version": "matrix-release-gate-v1",
+        "status": "blocked" if enforce and failures else "pass",
+        "enforced": enforce,
+        "failures": failures,
+        "release_ready": not failures,
+    }
+
+
+def _accepted_stage_ids(protocol_records: list[dict[str, Any]], accepted_protocol_ids: set[str]) -> set[str]:
+    stage_ids: set[str] = set()
+    for record in protocol_records:
+        protocol = record.get("protocol") or {}
+        protocol_id = str(record.get("protocol_id") or protocol.get("protocol_id") or "")
+        if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
+            continue
+        stage_ids.update(
+            str(stage.get("stage_id") or "") for stage in record.get("stages") or [] if stage.get("stage_id")
+        )
+    return stage_ids
+
+
+def _graph_node_ids_by_type(graph_protocols: dict[str, Any], node_type: str) -> set[str]:
+    ids: set[str] = set()
+    for graph in graph_protocols.values():
+        ids.update(str(node.get("id") or "") for node in graph.get("nodes", []) if node.get("type") == node_type)
+    return ids
+
+
+def _graph_action_event_ids(graph_protocols: dict[str, Any]) -> set[str]:
+    event_ids: set[str] = set()
+    for graph in graph_protocols.values():
+        for node in graph.get("nodes", []):
+            if node.get("type") != "action":
+                continue
+            if node.get("source_event_identity"):
+                event_ids.add(str(node.get("source_event_identity")))
+                continue
+            action_id = str(node.get("id") or "")
+            if action_id.startswith("action:"):
+                event_ids.add(action_id.removeprefix("action:"))
+    return event_ids
+
+
+def _provenance_event_ids(provenance_protocols: dict[str, Any]) -> set[str]:
+    event_ids: set[str] = set()
+    for protocol_provenance in provenance_protocols.values():
+        if not isinstance(protocol_provenance, dict):
+            continue
+        for refs in protocol_provenance.values():
+            if isinstance(refs, list):
+                event_ids.update(
+                    str(ref.get("event_identity") or ref.get("event_id") or "")
+                    for ref in refs
+                    if ref.get("event_identity") or ref.get("event_id")
+                )
+    return event_ids
+
+
+def _event_identity(event: dict[str, Any]) -> str:
+    event_id = str(event.get("event_id") or "")
+    if event_id:
+        return event_id
+    return "|".join(
+        str(event.get(key) or "")
+        for key in ("protocol_id", "stage_id", "factor_type", "factor_name", "day_start", "day_end", "operation")
+    )
 
 
 def _build_source_identity_report(
@@ -2137,6 +2593,9 @@ def _event_to_action(event: dict[str, Any]) -> dict[str, Any]:
         "duration_days": event.get("duration_days"),
         "concentration_value": event.get("concentration_value"),
         "concentration_unit": event.get("concentration_unit") or event.get("unit"),
+        "concentration_standard_value": event.get("concentration_standard_value"),
+        "concentration_standard_unit": event.get("concentration_standard_unit"),
+        "concentration_comparability_status": event.get("concentration_comparability_status"),
         "parse_status": event.get("parse_status"),
         "validation_status": event.get("validation_status"),
         "evidence": _event_ref(event),
@@ -2251,6 +2710,7 @@ def _stage_ref(stage: dict[str, Any]) -> dict[str, Any]:
 def _event_ref(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "entity_type": "protocol_factor_event",
+        "event_identity": _event_identity(event),
         "event_id": event.get("event_id") or "",
         "stage_id": event.get("stage_id") or "",
         "factor_type": event.get("factor_type") or "",
@@ -2261,6 +2721,11 @@ def _event_ref(event: dict[str, Any]) -> dict[str, Any]:
         "quote": event.get("evidence_quote") or "",
         "source_doc_id": event.get("source_doc_id") or "",
         "source_location": event.get("source_location") or "",
+        "concentration_value": event.get("concentration_value"),
+        "concentration_unit": event.get("concentration_unit") or event.get("unit"),
+        "concentration_standard_value": event.get("concentration_standard_value"),
+        "concentration_standard_unit": event.get("concentration_standard_unit"),
+        "concentration_comparability_status": event.get("concentration_comparability_status"),
     }
 
 
@@ -2357,6 +2822,9 @@ def _deduplicate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             event.get("day_start"),
             event.get("day_end"),
             event.get("concentration_raw") or event.get("concentration_value"),
+            event.get("concentration_unit") or event.get("unit"),
+            event.get("concentration_standard_value"),
+            event.get("concentration_standard_unit"),
             event.get("operation"),
         )
         if key in seen:
@@ -2479,6 +2947,33 @@ def _feature_name(value: str) -> str:
     return name
 
 
+def _reagent_feature_key_map(events: list[dict[str, Any]]) -> dict[str, str]:
+    labels_by_slug: dict[str, set[str]] = defaultdict(set)
+    for event in events:
+        if str(event.get("factor_type") or "") != "reagent":
+            continue
+        label = _factor_name(event)
+        slug = _feature_name(label)
+        if slug:
+            labels_by_slug[slug].add(label)
+
+    key_by_label: dict[str, str] = {}
+    for slug, labels in labels_by_slug.items():
+        if len(labels) == 1:
+            label = next(iter(labels))
+            key_by_label[label] = slug
+            continue
+        for label in labels:
+            digest = hashlib.sha1(label.lower().encode("utf-8")).hexdigest()[:8]
+            key_by_label[label] = f"{slug}__id_{digest}"
+    return key_by_label
+
+
+def _event_reagent_feature_key(event: dict[str, Any], reagent_feature_keys: dict[str, str]) -> str:
+    label = _factor_name(event)
+    return reagent_feature_keys.get(label, _feature_name(label))
+
+
 def _metadata_columns() -> tuple[str, ...]:
     return (
         "protocol_id",
@@ -2526,6 +3021,97 @@ def _max_stage_duration(stages: list[dict[str, Any]], events: list[dict[str, Any
         durations = [_safe_float(event.get("duration_days"), None) for event in events]
     values = [value for value in durations if value is not None]
     return max(values) if values else None
+
+
+def _standardized_concentration_fields(event: dict[str, Any]) -> dict[str, Any]:
+    value = _safe_float(event.get("concentration_value"), None)
+    unit = str(event.get("concentration_unit") or event.get("unit") or "").strip()
+    if value is None:
+        return {
+            "concentration_standard_value": "",
+            "concentration_standard_unit": "",
+            "concentration_comparability_status": "missing_value",
+        }
+    normalized_unit = _normalize_concentration_unit(unit)
+    unit_map = {
+        "ng/ml": ("ug/ml", 0.001),
+        "ug/ml": ("ug/ml", 1.0),
+        "mg/ml": ("ug/ml", 1000.0),
+        "nm": ("um", 0.001),
+        "um": ("um", 1.0),
+        "mm": ("um", 1000.0),
+        "%": ("%", 1.0),
+    }
+    if not normalized_unit:
+        status = "unit_missing"
+        return {
+            "concentration_standard_value": "",
+            "concentration_standard_unit": "",
+            "concentration_comparability_status": status,
+        }
+    if normalized_unit not in unit_map:
+        return {
+            "concentration_standard_value": "",
+            "concentration_standard_unit": normalized_unit,
+            "concentration_comparability_status": "unsupported_unit",
+        }
+    standard_unit, multiplier = unit_map[normalized_unit]
+    return {
+        "concentration_standard_value": round(value * multiplier, 9),
+        "concentration_standard_unit": standard_unit,
+        "concentration_comparability_status": "standardized",
+    }
+
+
+def _normalize_concentration_unit(unit: str) -> str:
+    text = unit.lower().strip().replace("μ", "u").replace("µ", "u")
+    text = text.replace(" ", "")
+    aliases = {
+        "ng/ml": "ng/ml",
+        "ng/mL".lower(): "ng/ml",
+        "ngml": "ng/ml",
+        "ug/ml": "ug/ml",
+        "ug/mL".lower(): "ug/ml",
+        "ugml": "ug/ml",
+        "microgram/ml": "ug/ml",
+        "mg/ml": "mg/ml",
+        "mg/mL".lower(): "mg/ml",
+        "mgml": "mg/ml",
+        "nm": "nm",
+        "nmol/l": "nm",
+        "nanomolar": "nm",
+        "um": "um",
+        "umol/l": "um",
+        "umolar": "um",
+        "micromolar": "um",
+        "mm": "mm",
+        "mmol/l": "mm",
+        "millimolar": "mm",
+        "%": "%",
+        "percent": "%",
+    }
+    return aliases.get(text, text)
+
+
+def _max_comparable_concentration(events: list[dict[str, Any]]) -> tuple[float | None, str, str]:
+    standardized_events = [
+        event for event in events if str(event.get("concentration_comparability_status") or "") == "standardized"
+    ]
+    if not standardized_events:
+        statuses = sorted(
+            {
+                str(event.get("concentration_comparability_status") or "missing_value")
+                for event in events
+                if event.get("concentration_value") not in (None, "")
+            }
+        )
+        return None, "", "|".join(statuses) if statuses else "not_reported"
+    units = {str(event.get("concentration_standard_unit") or "") for event in standardized_events}
+    if len(units) != 1:
+        return None, "|".join(sorted(units)), "mixed_standard_units_not_comparable"
+    values = [_safe_float(event.get("concentration_standard_value"), None) for event in standardized_events]
+    present_values = [value for value in values if value is not None]
+    return (max(present_values), next(iter(units)), "standardized") if present_values else (None, "", "missing_value")
 
 
 def _total_exposure_days(events: list[dict[str, Any]]) -> float:
@@ -2592,6 +3178,10 @@ def _truthy_feature(value: Any) -> bool:
 
 def _norm_text(value: str) -> str:
     return " ".join(value.replace("\\", "/").split("/")[-1].lower().split())
+
+
+def _is_accepted_protocol(protocol_id: str, accepted_protocol_ids: set[str]) -> bool:
+    return bool(protocol_id) and protocol_id in accepted_protocol_ids
 
 
 def _compact_event(event: dict[str, Any]) -> dict[str, Any]:

@@ -263,6 +263,10 @@ class FeatureSpec(BaseModel):
     trigger_patterns: list[str]
     value_rule: str
     source_fields: list[str]
+    stage_filter: dict[str, Any] = Field(default_factory=dict)
+    before_patterns: list[str] = Field(default_factory=list)
+    after_patterns: list[str] = Field(default_factory=list)
+    co_occurs_within_stage: list[str] = Field(default_factory=list)
     required_evidence: bool = True
     confidence: Confidence
     proposed_by: Literal["rule", "llm", "human"]
