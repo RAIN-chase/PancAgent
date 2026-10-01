@@ -15,7 +15,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Query Protocol Analysis Agent outputs.")
     parser.add_argument(
         "--output-dir",
-        default="runs/protocol_analysis_agent_run",
+        default="runs/protocol_analysis_agent_simplified_autofeatures",
         help="Directory containing protocol analysis outputs.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -37,6 +37,8 @@ def main() -> None:
     evidence_parser.add_argument("protocol_id")
     evidence_parser.add_argument("feature")
 
+    subparsers.add_parser("collection", help="Show protocol collection counts and matrix inventory.")
+
     chat_parser = subparsers.add_parser(
         "chat", help="Answer a natural-language protocol query using local structured outputs."
     )
@@ -55,6 +57,8 @@ def main() -> None:
         payload = engine.compare_protocols(args.protocol_id_a, args.protocol_id_b, max_features=args.max_features)
     elif args.command == "evidence":
         payload = engine.get_evidence_for_feature(args.protocol_id, args.feature)
+    elif args.command == "collection":
+        payload = engine.get_protocol_collection_summary()
     elif args.command == "chat":
         payload = engine.answer_question(args.question, max_features=args.max_features)
     else:

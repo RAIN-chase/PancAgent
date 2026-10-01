@@ -14,10 +14,18 @@ DATA_ANALYSIS_TOOL_REGISTRY: list[dict[str, Any]] = [
     {
         "tool_id": "dataset_manifest_gate",
         "category": "input_qc",
-        "status": "implemented_placeholder",
+        "status": "implemented",
         "purpose": "Validate reference atlas, organoid h5ad rows, annotation columns, and dataset linkage fields.",
         "expected_inputs": ["h5ad_manifest", "reference_atlas_h5ad", "organoid_h5ad"],
         "outputs": ["dataset_inventory", "manifest_findings"],
+    },
+    {
+        "tool_id": "exploratory_analysis_bundle",
+        "category": "exploratory_analysis",
+        "status": "implemented_artifact_and_validation_contract",
+        "purpose": "Archive sandbox-generated analysis code, environment, config, diagnostics, and validation checks.",
+        "expected_inputs": ["script", "environment", "config", "diagnostics", "validation_checks"],
+        "outputs": ["exploratory/analysis.py", "exploratory/environment.json", "exploratory/config.json", "exploratory/diagnostics.json"],
     },
     {
         "tool_id": "cell_type_composition",
@@ -452,12 +460,14 @@ def compute_marker_scores(
     common = _common_dataset_fields(normalized)
     rows: list[dict[str, Any]] = []
     for marker_set, genes in marker_sets.items():
-        expression_rows = [r for r in query_gene_expression(normalized, h5ad_config, genes, groupby=groupby) if r.get("status") == "ok"]
+        queried_rows = query_gene_expression(normalized, h5ad_config, genes, groupby=groupby)
+        expression_rows = [r for r in queried_rows if r.get("status") == "ok"]
         grouped: dict[str, list[float]] = {}
         for expr in expression_rows:
             grouped.setdefault(str(expr.get("group", "")), []).append(float(expr.get("mean_expression") or 0.0))
         found_genes = {str(expr.get("gene")) for expr in expression_rows}
         if not expression_rows:
+            failure = queried_rows[0] if queried_rows else {}
             rows.append(
                 {
                     **common,
@@ -467,7 +477,9 @@ def compute_marker_scores(
                     "score": "",
                     "n_genes_input": len(genes),
                     "n_genes_found": 0,
-                    "status": "no_marker_genes_found",
+                    "expression_source": failure.get("expression_source", ""),
+                    "message": failure.get("message", ""),
+                    "status": failure.get("status") or "no_marker_genes_found",
                 }
             )
             continue
@@ -481,6 +493,7 @@ def compute_marker_scores(
                     "score": round(sum(values) / len(values), 6) if values else "",
                     "n_genes_input": len(genes),
                     "n_genes_found": len(found_genes),
+                    "expression_source": expression_rows[0].get("expression_source", ""),
                     "status": "ok",
                 }
             )
@@ -657,11 +670,24 @@ def validate_data_analysis_inputs(
 ) -> dict[str, Any]:
     normalized_rows = [normalize_manifest_row(row, h5ad_config) for row in manifest_rows]
     findings: list[dict[str, Any]] = []
+    selection_rows: dict[tuple[str, ...], int] = {}
     for index, row in enumerate(normalized_rows):
         if not row["dataset_id"]:
             findings.append({"severity": "high", "row_index": index, "issue_type": "missing_dataset_id"})
         if not row["h5ad_path"]:
             findings.append({"severity": "high", "row_index": index, "issue_type": "missing_h5ad_path"})
+        selection_identity = _manifest_selection_identity(row)
+        if row["h5ad_path"] and selection_identity in selection_rows:
+            findings.append(
+                {
+                    "severity": "high",
+                    "row_index": index,
+                    "first_row_index": selection_rows[selection_identity],
+                    "issue_type": "duplicate_h5ad_cell_selection",
+                }
+            )
+        else:
+            selection_rows[selection_identity] = index
 
     reference_path = Path(reference_atlas_path) if reference_atlas_path else None
     if reference_path and not reference_path.exists():
@@ -683,6 +709,21 @@ def validate_data_analysis_inputs(
         "normalized_manifest_rows": normalized_rows,
         "findings": findings,
     }
+
+
+def _manifest_selection_identity(row: dict[str, Any]) -> tuple[str, ...]:
+    selectors = [str(row.get("h5ad_path") or "")]
+    for value_field, column_field in (
+        ("sample_id", "sample_column"),
+        ("condition_id", "condition_column"),
+        ("protocol_id", "protocol_column"),
+        ("dataset_id", "dataset_column"),
+    ):
+        value = str(row.get(value_field) or "")
+        column = str(row.get(column_field) or "")
+        if value and column:
+            selectors.extend((column, value))
+    return tuple(selectors)
 
 
 def score_gene_program_maturity_placeholder(

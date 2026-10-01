@@ -44,7 +44,7 @@ def discover_and_compute_features(
         raise FeatureSpecExecutionError(
             f"Formal feature registry contains invalid specs: {formal_registry_findings[:3]}"
         )
-    llm_specs, discovery_report = _discover_llm_feature_specs(
+    proposed_llm_specs, discovery_report = _discover_llm_feature_specs(
         protocol_records,
         analysis_events,
         accepted_protocol_ids,
@@ -52,7 +52,7 @@ def discover_and_compute_features(
         int(quality_filters.get("max_llm_feature_discovery_protocols", 0)),
     )
     llm_specs, llm_source_findings = _audit_llm_specs_against_source(
-        llm_specs,
+        proposed_llm_specs,
         protocol_records,
         analysis_events,
         accepted_protocol_ids,
@@ -75,6 +75,32 @@ def discover_and_compute_features(
         candidate_registry,
         require_executable=False,
     )
+    feature_spec_validation_report = _build_feature_spec_validation_report(
+        proposed_llm_specs,
+        protocol_records,
+        analysis_events,
+        accepted_protocol_ids,
+        candidate_rows,
+    )
+    validated_names = {
+        str(item.get("feature_name") or "")
+        for item in feature_spec_validation_report.get("features", [])
+        if item.get("status") == "pass"
+    }
+    validated_llm_specs = [spec for spec in llm_specs if str(spec.get("feature_name") or "") in validated_names]
+    if len(validated_llm_specs) != len(llm_specs):
+        candidate_registry, candidate_dedupe_findings = _dedupe_specs(
+            [*approved_registry, *validated_llm_specs], "candidate"
+        )
+        candidate_rows, candidate_cell_provenance, candidate_compile_findings = _compute_registry_features(
+            feature_rows,
+            feature_provenance,
+            analysis_events,
+            protocol_records,
+            candidate_registry,
+            require_executable=False,
+        )
+    proposed_llm_specs = _attach_validation_statuses(proposed_llm_specs, feature_spec_validation_report)
     cell_provenance = {
         "schema_version": "feature-cell-provenance-v1",
         "final_matrix": final_cell_provenance,
@@ -90,9 +116,11 @@ def discover_and_compute_features(
         *candidate_dedupe_findings,
         *final_compile_findings,
         *candidate_compile_findings,
+        *_feature_spec_validation_findings(feature_spec_validation_report),
     ]
     summary = dict(discovery_report.get("summary", {}))
     summary["n_findings"] = len(all_findings)
+    summary["n_validated_llm_features"] = feature_spec_validation_report["summary"]["n_passed"]
     return (
         final_rows,
         candidate_rows,
@@ -104,8 +132,9 @@ def discover_and_compute_features(
             "findings": all_findings,
             "base_feature_registry": _registry_payload(base_specs),
             "approved_feature_registry": _registry_payload(approved_registry),
-            "llm_proposed_feature_registry": _registry_payload(llm_specs),
+            "llm_proposed_feature_registry": _registry_payload(proposed_llm_specs),
             "candidate_feature_registry": _registry_payload(candidate_registry),
+            "feature_spec_validation_report": feature_spec_validation_report,
         },
     )
 
@@ -151,6 +180,8 @@ def _discover_llm_feature_specs(
                     "co_occurs_within_stage, conditional_count, or duration_between_events. "
                     "Use stage_filter, before_patterns, after_patterns, and co_occurs_within_stage when a feature "
                     "depends on stage scope, ordering, or same-stage combinations. "
+                    "Declare precise source_fields; deterministic validation will execute positive, negative, "
+                    "stage-scope, unit, missing-value, and matrix-recomputation checks. "
                     "Do not provide matrix values."
                 ),
             },
@@ -280,6 +311,282 @@ def _audit_llm_specs_against_source(
             }
         )
     return accepted, findings
+
+
+def _build_feature_spec_validation_report(
+    specs: list[dict[str, Any]],
+    protocol_records: list[dict[str, Any]],
+    analysis_events: list[dict[str, Any]],
+    accepted_protocol_ids: set[str],
+    candidate_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    records_by_protocol = {
+        str(record.get("protocol_id") or (record.get("protocol") or {}).get("protocol_id") or ""): record
+        for record in protocol_records
+    }
+    events_by_protocol: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in analysis_events:
+        events_by_protocol[str(event.get("protocol_id") or "")].append(event)
+    matrix_by_protocol = {str(row.get("protocol_id") or ""): row for row in candidate_rows}
+    validations = [
+        _validate_feature_spec(
+            spec,
+            records_by_protocol,
+            events_by_protocol,
+            accepted_protocol_ids,
+            matrix_by_protocol,
+        )
+        for spec in specs
+    ]
+    n_passed = sum(item["status"] == "pass" for item in validations)
+    return {
+        "schema_version": "feature-spec-validation-v1",
+        "summary": {
+            "n_features": len(validations),
+            "n_passed": n_passed,
+            "n_failed": len(validations) - n_passed,
+        },
+        "features": validations,
+    }
+
+
+def _validate_feature_spec(
+    spec: dict[str, Any],
+    records_by_protocol: dict[str, dict[str, Any]],
+    events_by_protocol: dict[str, list[dict[str, Any]]],
+    accepted_protocol_ids: set[str],
+    matrix_by_protocol: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    feature_name = str(spec.get("feature_name") or "")
+    observed_cases = []
+    detail_checks: list[bool] = []
+    recomputation_checks: list[bool] = []
+    execution_errors: list[str] = []
+    for protocol_id in sorted(accepted_protocol_ids):
+        value, refs, execution_error = _safe_compute_feature_value(
+            spec,
+            records_by_protocol.get(protocol_id, {}),
+            events_by_protocol.get(protocol_id, []),
+        )
+        if execution_error:
+            execution_errors.append(execution_error)
+        case_type = "positive" if _has_feature_value(spec, value) else "negative"
+        observed_cases.append(
+            {
+                "case_id": f"observed:{protocol_id}",
+                "case_type": case_type,
+                "protocol_id": protocol_id,
+                "expected_value": value,
+                "source_refs": refs,
+                "execution_error": execution_error,
+            }
+        )
+        if refs:
+            detail_checks.extend(_ref_preserves_required_detail(spec, ref) for ref in refs)
+        matrix_row = matrix_by_protocol.get(protocol_id, {})
+        recomputation_checks.append(
+            not execution_error and feature_name in matrix_row and matrix_row.get(feature_name) == value
+        )
+    missing_value, missing_refs, missing_error = _safe_compute_feature_value(spec, {}, [])
+    if missing_error:
+        execution_errors.append(missing_error)
+    missing_expected = _missing_feature_value(spec)
+    relation_cases = _relation_validation_cases(spec)
+    source_evidence_found = any(case["source_refs"] for case in observed_cases)
+    detail_status = "pass" if source_evidence_found and all(detail_checks or [True]) else "fail"
+    quantification_status = (
+        "pass" if matrix_by_protocol and all(feature_name in row for row in matrix_by_protocol.values()) else "fail"
+    )
+    recomputation_status = "pass" if recomputation_checks and all(recomputation_checks) else "fail"
+    unit_status = _unit_validation_status(spec, observed_cases)
+    stage_status = _stage_validation_status(spec, observed_cases)
+    missing_status = "pass" if not missing_error and missing_value == missing_expected and not missing_refs else "fail"
+    relation_status = "pass" if all(case["passed"] for case in relation_cases) else "fail"
+    dimension_statuses = {
+        "source_detail_preservation": detail_status,
+        "quantification_coverage": quantification_status,
+        "matrix_recomputation_consistency": recomputation_status,
+    }
+    auxiliary_statuses = {
+        "source_evidence": "pass" if source_evidence_found else "fail",
+        "unit_validation": unit_status,
+        "stage_scope_validation": stage_status,
+        "missing_value_semantics": missing_status,
+        "relation_case_validation": relation_status,
+    }
+    checked_statuses = [*dimension_statuses.values(), *auxiliary_statuses.values()]
+    return {
+        "feature_name": feature_name,
+        "status": "pass" if all(status in {"pass", "not_applicable"} for status in checked_statuses) else "fail",
+        "source_fields": spec.get("source_fields", []),
+        "dimensions": dimension_statuses,
+        "checks": auxiliary_statuses,
+        "missing_value_policy": _missing_value_policy(spec),
+        "execution_errors": sorted(set(execution_errors)),
+        "observed_positive_cases": [case for case in observed_cases if case["case_type"] == "positive"],
+        "observed_negative_cases": [case for case in observed_cases if case["case_type"] == "negative"],
+        "controlled_negative_case": {
+            "case_id": "controlled:empty_source",
+            "expected_value": missing_expected,
+            "actual_value": missing_value,
+            "passed": missing_status == "pass",
+        },
+        "relation_cases": relation_cases,
+    }
+
+
+def _safe_compute_feature_value(
+    spec: dict[str, Any], record: dict[str, Any], events: list[dict[str, Any]]
+) -> tuple[Any, list[dict[str, Any]], str]:
+    try:
+        value, refs = _compute_feature_value(spec, record, events)
+        return value, refs, ""
+    except FeatureSpecExecutionError as exc:
+        return _missing_feature_value(spec), _matching_refs(spec, record, events), str(exc)
+
+
+def _attach_validation_statuses(specs: list[dict[str, Any]], report: dict[str, Any]) -> list[dict[str, Any]]:
+    validations = {str(item.get("feature_name") or ""): item for item in report.get("features", [])}
+    enriched = []
+    for spec in specs:
+        payload = dict(spec)
+        validation = validations.get(str(spec.get("feature_name") or ""), {})
+        payload["validation_status"] = validation.get("status", "fail")
+        payload["validation_report_ref"] = f"feature_spec_validation_report.json#{spec.get('feature_name', '')}"
+        enriched.append(payload)
+    return enriched
+
+
+def _feature_spec_validation_findings(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "severity": "high",
+            "issue_type": "llm_feature_spec_validation_failed",
+            "feature_name": item.get("feature_name", ""),
+            "message": "LLM-proposed FeatureSpec failed deterministic validation and was excluded from candidates.",
+            "check_source": "feature_spec_validator",
+        }
+        for item in report.get("features", [])
+        if item.get("status") != "pass"
+    ]
+
+
+def _has_feature_value(spec: dict[str, Any], value: Any) -> bool:
+    if str(spec.get("feature_type") or "") in {"binary", "count"}:
+        return bool(_to_float(value))
+    return value not in {"", None}
+
+
+def _missing_feature_value(spec: dict[str, Any]) -> Any:
+    return 0 if str(spec.get("feature_type") or "") in {"binary", "count"} else ""
+
+
+def _missing_value_policy(spec: dict[str, Any]) -> str:
+    if str(spec.get("feature_type") or "") in {"binary", "count"}:
+        return "0 means not observed in accepted structured input; it does not prove biological absence"
+    return "empty means not reported or not safely comparable; it must not be imputed as zero"
+
+
+def _ref_preserves_required_detail(spec: dict[str, Any], ref: dict[str, Any]) -> bool:
+    if not ref.get("matched_pattern") or not ref.get("stage_id"):
+        return False
+    if spec.get("required_evidence", True) and not ref.get("quote"):
+        return False
+    if "concentration_value" in str(spec.get("value_rule") or ""):
+        return all(
+            ref.get(field) not in {None, ""}
+            for field in ("concentration_value", "concentration_unit", "concentration_comparability_status")
+        )
+    return True
+
+
+def _unit_validation_status(spec: dict[str, Any], observed_cases: list[dict[str, Any]]) -> str:
+    if "concentration_value" not in str(spec.get("value_rule") or ""):
+        return "not_applicable"
+    positive_refs = [ref for case in observed_cases for ref in case["source_refs"]]
+    if not positive_refs:
+        return "fail"
+    return "pass" if _comparable_concentration_field(positive_refs) else "fail"
+
+
+def _stage_validation_status(spec: dict[str, Any], observed_cases: list[dict[str, Any]]) -> str:
+    stage_filter = spec.get("stage_filter") or {}
+    if not stage_filter:
+        return "not_applicable"
+    refs = [ref for case in observed_cases for ref in case["source_refs"]]
+    return "pass" if refs and all(_matches_stage_filter(ref, stage_filter) for ref in refs) else "fail"
+
+
+def _relation_validation_cases(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    rule = str(spec.get("value_rule") or "")
+    patterns = [str(pattern) for pattern in spec.get("trigger_patterns", []) if str(pattern).strip()]
+    if rule not in {"co_occurrence", "co_occurs_within_stage"} or len(patterns) < 2:
+        return []
+    first, second = patterns[:2]
+    stage_filter = spec.get("stage_filter") or {}
+    cross_stage_expected = int(rule == "co_occurrence" and "stage_id" not in stage_filter)
+    definitions = [
+        ("only_a", [("s1", first)], 0),
+        ("only_b", [("s1", second)], 0),
+        ("same_stage_a_b", [("s1", first), ("s1", second)], 1),
+        ("cross_stage_a_b", [("s1", first), ("s2", second)], cross_stage_expected),
+        ("neither_reported", [], 0),
+    ]
+    cases = []
+    for case_name, items, expected in definitions:
+        record, events = _synthetic_relation_input(spec, items)
+        actual, _ = _compute_feature_value(spec, record, events)
+        cases.append(
+            {
+                "case_id": f"controlled:{case_name}",
+                "expected_value": expected,
+                "actual_value": actual,
+                "passed": actual == expected,
+            }
+        )
+    return cases
+
+
+def _synthetic_relation_input(
+    spec: dict[str, Any], items: list[tuple[str, str]]
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    stage_filter = spec.get("stage_filter") or {}
+    stages_by_id: dict[str, dict[str, Any]] = {}
+    events = []
+    for index, (default_stage_id, pattern) in enumerate(items, start=1):
+        configured_stage_id = str(stage_filter.get("stage_id") or "")
+        stage_id = configured_stage_id if default_stage_id == "s1" and configured_stage_id else default_stage_id
+        configured_stage_index = stage_filter.get("stage_index")
+        stage_index = configured_stage_index if default_stage_id == "s1" and configured_stage_index else index
+        stage = stages_by_id.setdefault(
+            stage_id,
+            {
+                "stage_id": stage_id,
+                "stage_index": stage_index,
+                "stage_name": pattern,
+                "key_operations": pattern,
+                "evidence_quote": pattern,
+            },
+        )
+        stage["stage_name"] = f"{stage['stage_name']} {pattern}"
+        stage["evidence_quote"] = f"{stage['evidence_quote']} {pattern}"
+        events.append(
+            {
+                "event_id": f"validation-{index}",
+                "protocol_id": "validation",
+                "stage_id": stage_id,
+                "stage_index": stage_index,
+                "factor_type": str(stage_filter.get("factor_type") or pattern),
+                "action_type": str(stage_filter.get("action_type") or pattern),
+                "factor_name": pattern,
+                "standardized_name": pattern,
+                "normalized_name": pattern,
+                "normalized_family": pattern,
+                "operation": pattern,
+                "evidence_quote": pattern,
+            }
+        )
+    return {"stages": list(stages_by_id.values())}, events
 
 
 def _compute_feature_value(

@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict
 
 from protocol_optimization_agent.io import write_csv_dicts, write_json, write_jsonl
+from protocol_optimization_agent.llm_client import LLMClient, build_llm_client
+from protocol_optimization_agent.scientific_reasoning import (
+    CONTEXT_FIELDS,
+    build_phenotype_ir,
+    interpret_phenotypes,
+    make_phenotype_interpreter,
+)
 from protocol_optimization_agent.tools.external_data_tools import (
     build_external_tool_inventory,
     get_external_data_analysis_tools,
@@ -27,6 +35,12 @@ from protocol_optimization_agent.tools.h5ad_tools import (
 
 
 class DataAnalysisState(TypedDict, total=False):
+    analysis_mode: str
+    execution_plan: dict[str, Any]
+    exploratory_artifacts: dict[str, Any]
+    validation_report: dict[str, Any]
+    phenotype_ir: dict[str, Any]
+    interpretation_report: dict[str, Any]
     manifest_rows: list[dict[str, Any]]
     reference_atlas_path: str
     gene_programs: dict[str, Any]
@@ -67,6 +81,8 @@ class DataAnalysisAgent:
         reference_atlas_path: Path | str | None = None,
         gene_programs: dict[str, Any] | None = None,
         project_root: Path | str | None = None,
+        interpreter: Callable[[dict[str, Any], int], list[dict[str, Any]]] | None = None,
+        interpretation_llm_client: LLMClient | None = None,
     ) -> None:
         self.output_dir = output_dir
         self.h5ad_config = h5ad_config or {}
@@ -74,6 +90,12 @@ class DataAnalysisAgent:
         self.gene_programs = gene_programs or self.h5ad_config.get("gene_programs", {}) or {}
         self.project_root = Path(project_root) if project_root else Path.cwd()
         self.callable_tools = get_external_data_analysis_tools(self.project_root)
+        self.interpreter = interpreter
+        interpretation = self.h5ad_config.get("interpretation", {})
+        if self.interpreter is None and interpretation.get("enabled"):
+            client = interpretation_llm_client or build_llm_client(interpretation.get("llm"))
+            self.interpreter = make_phenotype_interpreter(client, interpretation.get("claims", []),
+                                                        int(interpretation.get("max_metrics", 200)))
 
     def run(
         self,
@@ -84,6 +106,7 @@ class DataAnalysisAgent:
         effective_reference = Path(reference_atlas_path) if reference_atlas_path else self.reference_atlas_path
         effective_gene_programs = gene_programs if gene_programs is not None else self.gene_programs
         initial_state: DataAnalysisState = {
+            "analysis_mode": str(self.h5ad_config.get("analysis_mode") or "standard"),
             "manifest_rows": manifest_rows,
             "reference_atlas_path": str(effective_reference) if effective_reference else "",
             "gene_programs": effective_gene_programs or {},
@@ -116,6 +139,7 @@ class DataAnalysisAgent:
 
         graph = StateGraph(DataAnalysisState)
         graph.add_node("data_input_gate", self._node_data_input_gate)
+        graph.add_node("analysis_execution_planner", self._node_analysis_execution_planner)
         graph.add_node("dataset_inventory_builder", self._node_dataset_inventory_builder)
         graph.add_node("metadata_and_qc_summary", self._node_metadata_and_qc_summary)
         graph.add_node("cell_type_composition_analysis", self._node_cell_type_composition_analysis)
@@ -126,10 +150,12 @@ class DataAnalysisAgent:
         graph.add_node("external_tool_inventory", self._node_external_tool_inventory)
         graph.add_node("aggregate_quantitative_comparison", self._node_aggregate_quantitative_comparison)
         graph.add_node("data_analysis_audit", self._node_data_analysis_audit)
+        graph.add_node("phenotype_representation", self._node_phenotype_representation)
         graph.add_node("export_results", self._node_export_results)
 
         graph.add_edge(START, "data_input_gate")
-        graph.add_edge("data_input_gate", "dataset_inventory_builder")
+        graph.add_edge("data_input_gate", "analysis_execution_planner")
+        graph.add_edge("analysis_execution_planner", "dataset_inventory_builder")
         graph.add_edge("dataset_inventory_builder", "metadata_and_qc_summary")
         graph.add_edge("metadata_and_qc_summary", "cell_type_composition_analysis")
         graph.add_edge("cell_type_composition_analysis", "marker_and_gene_program_scoring")
@@ -139,7 +165,8 @@ class DataAnalysisAgent:
         graph.add_edge("regulatory_and_trajectory_placeholders", "external_tool_inventory")
         graph.add_edge("external_tool_inventory", "aggregate_quantitative_comparison")
         graph.add_edge("aggregate_quantitative_comparison", "data_analysis_audit")
-        graph.add_edge("data_analysis_audit", "export_results")
+        graph.add_edge("data_analysis_audit", "phenotype_representation")
+        graph.add_edge("phenotype_representation", "export_results")
         graph.add_edge("export_results", END)
         return graph.compile() if compile_graph else graph
 
@@ -157,12 +184,52 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "data_input_gate"),
         }
 
+    def _node_analysis_execution_planner(self, state: DataAnalysisState) -> DataAnalysisState:
+        requested_mode = str(state.get("analysis_mode") or "standard").lower()
+        mode = requested_mode if requested_mode in {"standard", "exploratory"} else "standard"
+        exploratory = state.get("h5ad_config", {}).get("exploratory_analysis", {})
+        plan = {
+            "schema_version": "data-analysis-execution-plan-v1",
+            "requested_mode": requested_mode,
+            "analysis_mode": mode,
+            "planner_policy": "validated_tools_first_then_audited_exploration",
+            "standard_tools": [
+                "dataset_manifest_gate",
+                "cell_type_composition",
+                "query_gene_expression",
+                "differential_expression",
+                "marker_score_analysis",
+                "gene_program_maturity_score",
+                "reference_similarity",
+            ],
+            "exploratory_code_execution": "external_sandbox_required",
+        }
+        artifacts = {
+            "script": str(exploratory.get("script") or "# No exploratory analysis requested.\n"),
+            "environment": exploratory.get("environment", {}),
+            "config": exploratory.get("config", {}),
+            "diagnostics": exploratory.get("diagnostics", {}),
+            "validation_checks": exploratory.get("validation_checks", []),
+        }
+        return {
+            **state,
+            "analysis_mode": mode,
+            "execution_plan": plan,
+            "exploratory_artifacts": artifacts,
+            "step_log": _append_step(state, "analysis_execution_planner"),
+        }
+
     def _node_dataset_inventory_builder(self, state: DataAnalysisState) -> DataAnalysisState:
         summaries: list[dict[str, Any]] = []
         limitations: list[dict[str, Any]] = []
         for row in state.get("normalized_manifest_rows", []):
             result = inspect_h5ad_dataset(row, state.get("h5ad_config", {}))
             summaries.append(_dataset_summary_from_inspection(row, result))
+            original = next((r for r in state.get("manifest_rows", []) if all(
+                str(r.get(field) or "") == str(row.get(field) or "")
+                for field in ("protocol_id", "dataset_id", "sample_id", "condition_id")
+            )), {})
+            summaries[-1].update({field: original[field] for field in CONTEXT_FIELDS if original.get(field) not in (None, "")})
             limitations.extend(result.get("limitations", []))
         return {
             **state,
@@ -303,11 +370,32 @@ class DataAnalysisAgent:
         limitations = list(state.get("limitations", []))
         for finding in state.get("input_gate_report", {}).get("findings", []):
             limitations.append({"limitation": finding.get("issue_type", "input_gate_finding"), **finding})
+        validation_report = _build_validation_report(state, limitations)
         return {
             **state,
             "limitations": limitations,
+            "validation_report": validation_report,
             "step_log": _append_step(state, "data_analysis_audit"),
         }
+
+    def _node_phenotype_representation(self, state: DataAnalysisState) -> DataAnalysisState:
+        tables = {
+            "cell_type_composition": state.get("composition_rows", []),
+            "marker_scores": state.get("marker_rows", []),
+            "gene_program_scores": state.get("gene_program_rows", []),
+            "gene_expression_summary": state.get("gene_expression_rows", []),
+            "differential_expression": state.get("differential_expression_rows", []),
+            "maturity_scores": state.get("maturity_rows", []),
+            "similarity_scores": state.get("similarity_rows", []),
+            "regulatory_program_scores": state.get("regulatory_rows", []),
+            "trajectory_scores": state.get("trajectory_rows", []),
+        }
+        phenotype_ir = build_phenotype_ir(tables, state.get("dataset_summaries", []), state.get("validation_report", {}), str(self.output_dir))
+        interpretation = interpret_phenotypes(
+            phenotype_ir, self.interpreter, int(self.h5ad_config.get("interpretation", {}).get("trajectories", 3)),
+        )
+        return {**state, "phenotype_ir": phenotype_ir, "interpretation_report": interpretation,
+                "step_log": _append_step(state, "phenotype_representation")}
 
     def _node_export_results(self, state: DataAnalysisState) -> DataAnalysisState:
         outputs = self._output_paths()
@@ -333,6 +421,18 @@ class DataAnalysisAgent:
             },
         )
         write_json(outputs["h5ad_analysis_limitations"], {"limitations": state.get("limitations", [])})
+        write_json(outputs["data_analysis_execution_plan"], state.get("execution_plan", {}))
+        write_json(outputs["data_analysis_validation"], state.get("validation_report", {}))
+        write_json(outputs["phenotype_ir"], state.get("phenotype_ir", {}))
+        write_json(outputs["phenotype_interpretation"], state.get("interpretation_report", {}))
+        exploratory = state.get("exploratory_artifacts", {})
+        outputs["exploratory_analysis_script"].parent.mkdir(parents=True, exist_ok=True)
+        outputs["exploratory_analysis_script"].write_text(
+            str(exploratory.get("script") or "# No exploratory analysis requested.\n"), encoding="utf-8"
+        )
+        write_json(outputs["exploratory_environment"], exploratory.get("environment", {}))
+        write_json(outputs["exploratory_config"], exploratory.get("config", {}))
+        write_json(outputs["exploratory_diagnostics"], exploratory.get("diagnostics", {}))
         write_json(
             outputs["data_analysis_tool_registry"],
             {
@@ -347,6 +447,9 @@ class DataAnalysisAgent:
             {
                 "schema_version": "data-analysis-query-result-v1",
                 "status": "ready_for_orchestrator_dispatch",
+                "analysis_mode": state.get("analysis_mode", "standard"),
+                "validation_status": state.get("validation_report", {}).get("validation_status", "failed"),
+                "po_ready": state.get("validation_report", {}).get("po_ready", False),
                 "supported_operations": [
                     "summary",
                     "cell_type_composition",
@@ -384,6 +487,14 @@ class DataAnalysisAgent:
             "data_analysis_tool_registry": self.output_dir / "data_analysis_tool_registry.json",
             "data_analysis_comparison_report": self.output_dir / "data_analysis_comparison_report.json",
             "data_analysis_query_result": self.output_dir / "data_analysis_query_result.json",
+            "data_analysis_execution_plan": self.output_dir / "data_analysis_execution_plan.json",
+            "data_analysis_validation": self.output_dir / "data_analysis_validation.json",
+            "phenotype_ir": self.output_dir / "phenotype_ir.json",
+            "phenotype_interpretation": self.output_dir / "phenotype_interpretation.json",
+            "exploratory_analysis_script": self.output_dir / "exploratory" / "analysis.py",
+            "exploratory_environment": self.output_dir / "exploratory" / "environment.json",
+            "exploratory_config": self.output_dir / "exploratory" / "config.json",
+            "exploratory_diagnostics": self.output_dir / "exploratory" / "diagnostics.json",
         }
 
 
@@ -465,6 +576,8 @@ def _compute_gene_program_scores(
                 "n_genes_input": score.get("n_genes_input", ""),
                 "n_genes_found": score.get("n_genes_found", ""),
                 "program_score": score.get("score", ""),
+                "expression_source": score.get("expression_source", ""),
+                "message": score.get("message", ""),
                 "status": score.get("status", ""),
             }
         )
@@ -501,3 +614,192 @@ def _build_protocol_summary_rows(dataset_summaries: list[dict[str, Any]]) -> lis
 
 def _append_step(state: DataAnalysisState, node: str) -> list[dict[str, Any]]:
     return [*state.get("step_log", []), {"node": node, "status": "completed"}]
+
+
+def _build_validation_report(
+    state: DataAnalysisState, limitations: list[dict[str, Any]]
+) -> dict[str, Any]:
+    config = state.get("h5ad_config", {})
+    summaries = state.get("dataset_summaries", [])
+    findings = state.get("input_gate_report", {}).get("findings", [])
+    expression_rows = state.get("gene_expression_rows", [])
+    expression_dependent_rows = [
+        *expression_rows,
+        *state.get("marker_rows", []),
+        *state.get("gene_program_rows", []),
+        *state.get("differential_expression_rows", []),
+    ]
+    de_rows = state.get("differential_expression_rows", [])
+
+    checks = [
+        _validation_check(
+            "manifest_identity",
+            bool(summaries) and not any(finding.get("severity") == "high" for finding in findings),
+            "Manifest rows must identify a dataset and h5ad path.",
+        ),
+        _validation_check(
+            "cell_selection",
+            bool(summaries)
+            and all(
+                row.get("cell_filter_status") == "ok" and int(row.get("n_cells_selected") or 0) > 0
+                for row in summaries
+            ),
+            "Every manifest row must select at least one cell using its declared obs filters.",
+        ),
+        _rows_validation_check(
+            "gene_resolution",
+            [*expression_rows, *de_rows],
+            requested=bool(config.get("query_genes") or config.get("differential_expression")),
+            blocked_statuses={"gene_not_found"},
+            detail="Every requested gene must resolve against the selected expression source.",
+        ),
+        _rows_validation_check(
+            "expression_source",
+            expression_dependent_rows,
+            requested=bool(
+                config.get("query_genes")
+                or config.get("marker_sets")
+                or state.get("gene_programs")
+                or config.get("differential_expression")
+            ),
+            blocked_statuses={"expression_source_missing", "expression_source_conflict"},
+            detail="The configured X, layer, or raw.X source must exist and be unambiguous.",
+        ),
+        _rows_validation_check(
+            "comparison_groups",
+            de_rows,
+            requested=bool(config.get("differential_expression")),
+            blocked_statuses={"insufficient_groups_for_de", "obs_column_missing"},
+            detail="Both differential-expression groups must contain selected cells.",
+        ),
+        _validation_check(
+            "expression_scale",
+            not config.get("differential_expression")
+            or str(config.get("expression_scale") or "").lower()
+            in {
+                "counts",
+                "raw_counts",
+                "normalized",
+                "normalized_counts",
+                "cpm",
+                "tpm",
+                "log",
+                "log1p",
+                "scaled",
+                "zscore",
+            },
+            "Differential expression requires an explicit counts, normalized, or log expression_scale.",
+        ),
+        _numeric_rows_validation_check(
+            "maturity_scoring",
+            state.get("maturity_rows", []),
+            ("maturity_score",),
+            detail="Maturity rows must contain validated numeric results before protocol optimization.",
+        ),
+        _numeric_rows_validation_check(
+            "reference_similarity",
+            state.get("similarity_rows", []),
+            ("cosine_similarity", "euclidean_distance"),
+            detail="Reference-similarity rows must contain validated numeric results before protocol optimization.",
+        ),
+    ]
+
+    exploratory_check = _exploratory_validation_check(state)
+    checks.append(exploratory_check)
+    passed = all(check["passed"] for check in checks)
+    return {
+        "schema_version": "data-analysis-validation-v1",
+        "analysis_mode": state.get("analysis_mode", "standard"),
+        "validation_status": "passed" if passed else "failed",
+        "po_ready": passed,
+        "checks": checks,
+        "n_limitations": len(limitations),
+        "quality_interpretation": (
+            "Deterministic readiness gate only. Any LLM-authored qualitative score is commentary, "
+            "not a statistical confidence probability."
+        ),
+    }
+
+
+def _validation_check(check_id: str, passed: bool, detail: str) -> dict[str, Any]:
+    return {"check_id": check_id, "passed": bool(passed), "detail": detail}
+
+
+def _rows_validation_check(
+    check_id: str,
+    rows: list[dict[str, Any]],
+    *,
+    requested: bool,
+    blocked_statuses: set[str],
+    detail: str,
+) -> dict[str, Any]:
+    if not requested:
+        return {"check_id": check_id, "passed": True, "status": "not_requested", "detail": detail}
+    statuses = {str(row.get("status") or "") for row in rows}
+    passed = bool(rows) and not statuses.intersection(blocked_statuses)
+    return {
+        "check_id": check_id,
+        "passed": passed,
+        "status": "passed" if passed else "failed",
+        "observed_statuses": sorted(statuses),
+        "detail": detail,
+    }
+
+
+def _numeric_rows_validation_check(
+    check_id: str,
+    rows: list[dict[str, Any]],
+    numeric_fields: tuple[str, ...],
+    *,
+    detail: str,
+) -> dict[str, Any]:
+    passed = bool(rows) and all(
+        str(row.get("status") or "") not in {"pending", "input_data_pending"}
+        and all(_is_finite_number(row.get(field)) for field in numeric_fields)
+        for row in rows
+    )
+    return {
+        "check_id": check_id,
+        "passed": passed,
+        "status": "passed" if passed else "failed",
+        "numeric_fields": list(numeric_fields),
+        "detail": detail,
+    }
+
+
+def _is_finite_number(value: Any) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return number == number and number not in {float("inf"), float("-inf")}
+
+
+def _exploratory_validation_check(state: DataAnalysisState) -> dict[str, Any]:
+    if state.get("analysis_mode") != "exploratory":
+        return {
+            "check_id": "exploratory_artifacts",
+            "passed": True,
+            "status": "not_requested",
+            "detail": "Exploratory analysis was not requested.",
+        }
+    artifacts = state.get("exploratory_artifacts", {})
+    diagnostics = artifacts.get("diagnostics", {})
+    declared_checks = artifacts.get("validation_checks", [])
+    passed = bool(
+        artifacts.get("script")
+        and artifacts.get("environment")
+        and artifacts.get("config")
+        and diagnostics.get("execution_succeeded") is True
+        and declared_checks
+        and all(isinstance(check, dict) and check.get("passed") is True for check in declared_checks)
+    )
+    return {
+        "check_id": "exploratory_artifacts",
+        "passed": passed,
+        "status": "passed" if passed else "failed",
+        "detail": (
+            "Exploratory code must run in an external sandbox and preserve its script, environment, "
+            "configuration, diagnostics, and deterministic validation checks."
+        ),
+    }

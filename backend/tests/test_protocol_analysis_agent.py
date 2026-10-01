@@ -103,6 +103,7 @@ def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_pa
     assert outputs["predefined_feature_registry"].exists()
     assert outputs["feature_cell_provenance"].exists()
     assert outputs["feature_discovery_audit_report"].exists()
+    assert outputs["feature_spec_validation_report"].exists()
     assert outputs["schema_validation_report"].exists()
     assert outputs["normalized_factor_events"].exists()
     assert outputs["semantic_stage_annotations"].exists()
@@ -598,7 +599,7 @@ def test_llm_feature_discovery_adds_candidate_column_without_approval(tmp_path: 
                         "required_evidence": True,
                         "confidence": "medium",
                         "proposed_by": "llm",
-                    }
+                    },
                 ],
             }
         }
@@ -672,7 +673,7 @@ def test_llm_feature_discovery_rejects_columns_without_source_evidence(tmp_path:
                         "required_evidence": True,
                         "confidence": "medium",
                         "proposed_by": "llm",
-                    }
+                    },
                 ],
             }
         }
@@ -692,9 +693,112 @@ def test_llm_feature_discovery_rejects_columns_without_source_evidence(tmp_path:
     candidate_rows = list(csv.DictReader(outputs["protocol_candidate_feature_matrix"].open(encoding="utf-8")))
     assert "has_unsupported_llm_claim" not in candidate_rows[0]
     proposed = json.loads(outputs["llm_proposed_feature_registry"].read_text(encoding="utf-8"))
-    assert proposed["summary"]["n_features"] == 0
+    assert proposed["summary"]["n_features"] == 1
+    assert proposed["features"][0]["validation_status"] == "fail"
     audit = json.loads(outputs["feature_discovery_audit_report"].read_text(encoding="utf-8"))
     assert audit["findings"][0]["issue_type"] == "llm_feature_spec_has_no_source_evidence"
+
+
+def test_llm_feature_spec_validation_executes_relation_cases_and_matrix_recomputation(tmp_path: Path) -> None:
+    records = [
+        {
+            "protocol_id": "p1",
+            "paper_id": "paper_a",
+            "comparison_ready": True,
+            "confidence": {"extraction": "high"},
+            "protocol": {"protocol_id": "p1", "protocol_name": "Protocol A", "number_of_stages": 1},
+            "stages": [{"stage_id": "s1", "stage_index": 1, "stage_name": "Stage 1"}],
+        }
+    ]
+    events = [
+        {
+            "protocol_id": "p1",
+            "stage_id": "s1",
+            "stage_index": "1",
+            "factor_type": "reagent",
+            "factor_name": name,
+            "standardized_name": name,
+            "validation_status": "evidence_supported",
+            "parse_status": "categorical",
+            "concentration_parse_status": "not_applicable",
+            "evidence_quote": f"{name} was added.",
+        }
+        for name in ("Activin A", "CHIR99021")
+    ]
+    llm_client = StaticMockLLMClient(
+        {
+            "feature_discovery": {
+                "protocol_id": "p1",
+                "proposed_features": [
+                    {
+                        "feature_name": "llm_activin_chir_same_stage",
+                        "feature_type": "binary",
+                        "level": "stage",
+                        "biological_category": "signal_combination",
+                        "rationale": "Activin and CHIR must occur in the same stage.",
+                        "trigger_patterns": ["Activin", "CHIR99021"],
+                        "value_rule": "co_occurs_within_stage",
+                        "source_fields": ["event.factor_name", "event.evidence_quote"],
+                        "co_occurs_within_stage": ["Activin", "CHIR99021"],
+                        "required_evidence": True,
+                        "confidence": "medium",
+                        "proposed_by": "llm",
+                    },
+                    {
+                        "feature_name": "llm_invalid_rule",
+                        "feature_type": "binary",
+                        "level": "protocol",
+                        "biological_category": "invalid_test",
+                        "rationale": "An invalid DSL rule must fail validation without aborting the run.",
+                        "trigger_patterns": ["Activin"],
+                        "value_rule": "llm_decides_value",
+                        "source_fields": ["event.factor_name"],
+                        "required_evidence": True,
+                        "confidence": "medium",
+                        "proposed_by": "llm",
+                    },
+                ],
+            }
+        }
+    )
+
+    outputs = ProtocolAnalysisAgent(
+        output_dir=tmp_path,
+        quality_filters={
+            "require_comparison_ready": True,
+            "allowed_event_validation_statuses": ["evidence_supported"],
+            "max_llm_feature_discovery_protocols": 1,
+        },
+        llm_client=llm_client,
+    ).run(records, events, [])
+
+    report = json.loads(outputs["feature_spec_validation_report"].read_text(encoding="utf-8"))
+    validation = report["features"][0]
+    assert validation["status"] == "pass"
+    assert validation["source_fields"] == ["event.factor_name", "event.evidence_quote"]
+    assert validation["dimensions"] == {
+        "source_detail_preservation": "pass",
+        "quantification_coverage": "pass",
+        "matrix_recomputation_consistency": "pass",
+    }
+    relation_cases = {case["case_id"]: case for case in validation["relation_cases"]}
+    assert set(relation_cases) == {
+        "controlled:only_a",
+        "controlled:only_b",
+        "controlled:same_stage_a_b",
+        "controlled:cross_stage_a_b",
+        "controlled:neither_reported",
+    }
+    assert relation_cases["controlled:same_stage_a_b"]["actual_value"] == 1
+    assert relation_cases["controlled:cross_stage_a_b"]["actual_value"] == 0
+    assert all(case["passed"] for case in relation_cases.values())
+    assert validation["controlled_negative_case"]["passed"] is True
+    assert "does not prove biological absence" in validation["missing_value_policy"]
+    invalid = report["features"][1]
+    assert invalid["status"] == "fail"
+    assert "not executable" in invalid["execution_errors"][0]
+    candidate_row = next(csv.DictReader(outputs["protocol_candidate_feature_matrix"].open(encoding="utf-8")))
+    assert "llm_invalid_rule" not in candidate_row
 
 
 def test_approved_feature_specs_are_compiled_by_explicit_dsl(tmp_path: Path) -> None:
@@ -980,6 +1084,24 @@ def test_protocol_query_layer_finds_author_year_with_normalized_tokens(tmp_path:
     hits = ProtocolQueryEngine(tmp_path).find_protocols("Akgün 2024")
     assert hits[0]["protocol_id"] == "p1"
     assert hits[0]["matched_tokens"] == ["2024", "akgun"]
+
+
+def test_protocol_query_layer_answers_collection_count_without_text_search(tmp_path: Path) -> None:
+    matrix_path = tmp_path / "protocol_feature_matrix.csv"
+    matrix_path.write_text(
+        "protocol_id,paper_id,dataset_id,protocol_name,confidence_score,comparison_ready,activin_presence\n"
+        "p1,paper_a,GSE1,Protocol A,0.9,True,1\n"
+        "p2,paper_b,GSE2,Protocol B,0.8,True,0\n"
+        "p3,paper_c,GSE3,No matching English keyword,0.7,False,1\n",
+        encoding="utf-8",
+    )
+
+    result = ProtocolQueryEngine(tmp_path).answer_question("一共有多少protocols可供比较")
+
+    assert result["intent"] == "protocol_collection_summary"
+    assert result["tool_result"]["n_protocols"] == 3
+    assert result["tool_result"]["n_comparison_ready_protocols"] == 2
+    assert "3 protocols" in result["answer"]
 
 
 def test_protocol_query_layer_generates_feature_heatmap(tmp_path: Path) -> None:

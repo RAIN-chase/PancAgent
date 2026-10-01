@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ DATA_ANALYSIS_REQUIRED_OUTPUTS = (
     "trajectory_scores.csv",
     "data_analysis_protocol_summary.csv",
     "h5ad_summary_by_protocol.jsonl",
+    "data_analysis_validation.json",
 )
 
 
@@ -33,10 +35,11 @@ class UpstreamOutputStatus:
     empty_files: tuple[str, ...]
     newest_mtime: float | None
     fingerprint: str
+    validation_errors: tuple[str, ...] = ()
 
     @property
     def ready(self) -> bool:
-        return not self.missing_files and not self.empty_files
+        return not self.missing_files and not self.empty_files and not self.validation_errors
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +51,7 @@ class UpstreamOutputStatus:
             "empty_files": list(self.empty_files),
             "newest_mtime": self.newest_mtime,
             "fingerprint": self.fingerprint,
+            "validation_errors": list(self.validation_errors),
         }
 
 
@@ -109,6 +113,7 @@ def inspect_upstream_outputs(agent: str, output_dir: Path, required_files: tuple
         (output_dir / file_name).stat().st_mtime for file_name in required_files if (output_dir / file_name).exists()
     ]
     fingerprint = content_fingerprint({file_name: str(output_dir / file_name) for file_name in required_files})
+    validation_errors = _validation_errors(agent, output_dir)
     return UpstreamOutputStatus(
         agent=agent,
         output_dir=output_dir,
@@ -117,7 +122,27 @@ def inspect_upstream_outputs(agent: str, output_dir: Path, required_files: tuple
         empty_files=empty,
         newest_mtime=max(mtimes) if mtimes else None,
         fingerprint=fingerprint,
+        validation_errors=validation_errors,
     )
+
+
+def _validation_errors(agent: str, output_dir: Path) -> tuple[str, ...]:
+    if agent != "data_analysis_agent":
+        return ()
+    path = output_dir / "data_analysis_validation.json"
+    if not path.exists() or path.stat().st_size == 0:
+        return ()
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ("data_analysis_validation_unreadable",)
+    if (
+        report.get("schema_version") != "data-analysis-validation-v1"
+        or report.get("po_ready") is not True
+        or report.get("validation_status") != "passed"
+    ):
+        return ("data_analysis_validation_failed",)
+    return ()
 
 
 def _required_reruns(rerun_protocol: bool, rerun_data: bool) -> list[str]:

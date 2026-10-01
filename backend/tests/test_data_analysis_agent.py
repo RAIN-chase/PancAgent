@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
 from protocol_optimization_agent.tools.external_data_tools import get_external_data_analysis_tools
-from protocol_optimization_agent.tools.h5ad_tools import compute_differential_expression, query_gene_expression
+from protocol_optimization_agent.tools.h5ad_tools import (
+    compute_differential_expression,
+    query_gene_expression,
+    validate_data_analysis_inputs,
+)
 
 
 def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
@@ -58,6 +62,12 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
         "data_analysis_tool_registry",
         "data_analysis_comparison_report",
         "data_analysis_query_result",
+        "data_analysis_execution_plan",
+        "data_analysis_validation",
+        "exploratory_analysis_script",
+        "exploratory_environment",
+        "exploratory_config",
+        "exploratory_diagnostics",
     }
     assert expected.issubset(outputs)
     assert all(path.exists() for path in outputs.values())
@@ -89,9 +99,13 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
     assert qc_report["input_gate_report"]["summary"]["n_gene_program_lineages"] == 2
     assert [step["node"] for step in qc_report["step_log"]][:3] == [
         "data_input_gate",
+        "analysis_execution_planner",
         "dataset_inventory_builder",
-        "metadata_and_qc_summary",
     ]
+
+    validation = json.loads(outputs["data_analysis_validation"].read_text(encoding="utf-8"))
+    assert validation["po_ready"] is False
+    assert validation["quality_interpretation"].endswith("not a statistical confidence probability.")
 
     external_rows = list(csv.DictReader(outputs["external_tool_inventory"].open(encoding="utf-8")))
     scanpy_row = next(row for row in external_rows if row["tool_id"] == "scanpy_h5ad_profile_tool")
@@ -169,6 +183,76 @@ def test_data_analysis_agent_runs_small_h5ad_analysis(tmp_path: Path) -> None:
     assert qc_report["qc_rows"][0]["n_cells_selected"] == 5
     query_contract = json.loads(outputs["data_analysis_query_result"].read_text(encoding="utf-8"))
     assert "differential_expression" in query_contract["supported_operations"]
+    validation = json.loads(outputs["data_analysis_validation"].read_text(encoding="utf-8"))
+    checks = {row["check_id"]: row for row in validation["checks"]}
+    assert checks["cell_selection"]["passed"] is True
+    assert checks["expression_scale"]["passed"] is True
+    assert validation["po_ready"] is False
+
+
+def test_same_h5ad_can_define_multiple_manifest_datasets(tmp_path: Path) -> None:
+    adata_path = _write_synthetic_h5ad(tmp_path)
+    outputs = DataAnalysisAgent(
+        output_dir=tmp_path / "out",
+        h5ad_config={
+            "annotation_cell_type_column": "cell_type",
+            "batch_column": "batch",
+            "lineage_column": "lineage",
+            "dataset_column": "dataset",
+            "backed": True,
+        },
+    ).run(
+        [
+            {"protocol_id": "p1", "dataset_id": "organoid_a", "h5ad_path": str(adata_path)},
+            {"protocol_id": "p2", "dataset_id": "organoid_b", "h5ad_path": str(adata_path)},
+        ]
+    )
+
+    rows = list(csv.DictReader(outputs["cell_type_composition"].open(encoding="utf-8")))
+    a_rows = [row for row in rows if row["dataset_id"] == "organoid_a"]
+    b_rows = [row for row in rows if row["dataset_id"] == "organoid_b"]
+    assert {row["n_cells_selected"] for row in a_rows} == {"5"}
+    assert {row["n_cells_selected"] for row in b_rows} == {"1"}
+    assert {row["cell_filter"] for row in a_rows} == {"dataset=organoid_a"}
+
+
+def test_exploratory_mode_archives_reproducibility_bundle(tmp_path: Path) -> None:
+    outputs = DataAnalysisAgent(
+        output_dir=tmp_path / "out",
+        h5ad_config={
+            "analysis_mode": "exploratory",
+            "exploratory_analysis": {
+                "script": "print('sandboxed analysis')\n",
+                "environment": {"python": "3.11", "packages": {"scanpy": "1.11"}},
+                "config": {"method": "custom_metric"},
+                "diagnostics": {"execution_succeeded": True, "exit_code": 0},
+                "validation_checks": [{"check_id": "output_schema", "passed": True}],
+            },
+        },
+    ).run([])
+
+    assert outputs["exploratory_analysis_script"].read_text(encoding="utf-8") == "print('sandboxed analysis')\n"
+    plan = json.loads(outputs["data_analysis_execution_plan"].read_text(encoding="utf-8"))
+    assert plan["analysis_mode"] == "exploratory"
+    validation = json.loads(outputs["data_analysis_validation"].read_text(encoding="utf-8"))
+    checks = {row["check_id"]: row for row in validation["checks"]}
+    assert checks["exploratory_artifacts"]["passed"] is True
+    assert validation["po_ready"] is False
+
+
+def test_manifest_gate_rejects_duplicate_cell_selection(tmp_path: Path) -> None:
+    path = str(tmp_path / "combined.h5ad")
+    report = validate_data_analysis_inputs(
+        [
+            {"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": path},
+            {"protocol_id": "p2", "dataset_id": "d2", "h5ad_path": path},
+        ],
+        None,
+        {},
+        {},
+    )
+
+    assert report["findings"][-1]["issue_type"] == "duplicate_h5ad_cell_selection"
 
 
 def test_gene_expression_reports_missing_obs_column(tmp_path: Path) -> None:
@@ -288,6 +372,7 @@ def _write_synthetic_h5ad(tmp_path: Path) -> Path:
             "lineage": ["endocrine", "endocrine", "endocrine", "endocrine", "endocrine", "ductal"],
             "sample_id": ["s1", "s1", "s1", "s1", "s1", "s2"],
             "condition_id": ["baseline", "baseline", "baseline", "baseline", "baseline", "baseline"],
+            "dataset": ["organoid_a", "organoid_a", "organoid_a", "organoid_a", "organoid_a", "organoid_b"],
         },
         index=[f"cell{i}" for i in range(x.shape[0])],
     )

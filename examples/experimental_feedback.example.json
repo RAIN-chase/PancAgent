@@ -1,0 +1,37 @@
+{
+  "experiment_id": "REPLACE_EXPERIMENT_ID",
+  "evidence": {
+    "id": "REPLACE_NEW_EVIDENCE_ID",
+    "kind": "experiment_result",
+    "source_refs": [{"artifact_id": "REPLACE_VALIDATED_ANALYSIS_ARTIFACT_ID"}],
+    "run_id": "REPLACE_ANALYSIS_RUN_ID",
+    "trace_id": "REPLACE_ANALYSIS_TRACE_ID",
+    "quality": "passed",
+    "observations": {"experiment_id": "REPLACE_EXPERIMENT_ID"}
+  },
+  "outcomes": {"REPLACE_HYPOTHESIS_ID": "inconclusive"},
+  "interpretation": "Replace with the researcher's interpretation of the controlled experimental results.",
+  "researcher": "REPLACE_RESEARCHER_ID",
+  "phenotypes": [
+    {
+      "id": "REPLACE_NEW_PHENOTYPE_ID",
+      "protocol_id": "REPLACE_PROTOCOL_ID",
+      "dataset_id": "REPLACE_DATASET_ID",
+      "sample_id": "REPLACE_SAMPLE_ID",
+      "validation_status": "passed",
+      "metadata": {"cell_line": "REPLACE_CELL_LINE", "stage": "REPLACE_STAGE"},
+      "metrics": [
+        {
+          "id": "REPLACE_METRIC_ID",
+          "family": "maturity",
+          "endpoint": "beta_maturity",
+          "value": null,
+          "unit": "source_scale",
+          "status": "pending",
+          "method": "REPLACE_VALIDATED_METHOD_AND_VERSION",
+          "evidence_refs": [{"artifact_id": "REPLACE_VALIDATED_ANALYSIS_ARTIFACT_ID"}]
+        }
+      ]
+    }
+  ]
+}

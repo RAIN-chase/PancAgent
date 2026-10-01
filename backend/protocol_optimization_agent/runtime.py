@@ -67,7 +67,7 @@ def resolve_agent_output_dir(
     if env_value:
         return str(authorize_output_path(Path(env_value), context))
     if default_value:
-        return str(context.agent_output_dir(agent_id))
+        return str(authorize_output_path(Path(default_value), context))
     return str(context.agent_output_dir(agent_id))
 
 

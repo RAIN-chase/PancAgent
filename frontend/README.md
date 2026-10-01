@@ -6,7 +6,7 @@ Default local configuration:
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:2024
-NEXT_PUBLIC_ASSISTANT_ID=protocol_chat
+NEXT_PUBLIC_ASSISTANT_ID=orchestrator
 NEXT_PUBLIC_AUTH_SCHEME=
 ```
 
@@ -14,7 +14,7 @@ Recommended local startup from the repository root:
 
 ```powershell
 .\scripts\start_langgraph_server.ps1 -Port 2024 -OutputDir "runs\protocol_analysis_agent_simplified_autofeatures"
-.\scripts\start_frontend.ps1 -Port 5173
+.\scripts\start_frontend.ps1 -Port 5173 -LangGraphApiUrl "http://localhost:2024" -AssistantId "orchestrator"
 ```
 
 The chat UI connects directly to the LangGraph server. The FastAPI backend can still be started separately for REST endpoints, but it is not required for this chat UI path.
@@ -22,7 +22,7 @@ For LAN usage, bind both services to `0.0.0.0`, but configure the browser-facing
 
 ```env
 NEXT_PUBLIC_API_URL=http://10.203.168.222:2024
-NEXT_PUBLIC_ASSISTANT_ID=protocol_chat
+NEXT_PUBLIC_ASSISTANT_ID=orchestrator
 NEXT_PUBLIC_AUTH_SCHEME=
 ```
 
@@ -30,7 +30,7 @@ Start from the repository root:
 
 ```powershell
 .\scripts\start_langgraph_server.ps1 -HostAddress 0.0.0.0 -Port 2024 -OutputDir "runs\protocol_analysis_agent_simplified_autofeatures"
-.\scripts\start_frontend.ps1 -HostAddress 0.0.0.0 -Port 5173
+.\scripts\start_frontend.ps1 -HostAddress 0.0.0.0 -Port 5173 -LangGraphApiUrl "http://10.203.168.222:2024" -AssistantId "orchestrator"
 ```
 
 ---

@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import InjectedState, ToolNode
 
+from protocol_optimization_agent.action_space import action_registry, get_action
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
 from protocol_optimization_agent.agents.protocol_optimizing import ProtocolOptimizingAgent
@@ -28,6 +29,14 @@ from protocol_optimization_agent.runtime import (
     resolve_agent_output_dir,
     write_run_manifest,
 )
+from protocol_optimization_agent.scientific_ingestion import (
+    ingest_experiment_proposals,
+    ingest_phenotype_outputs,
+    ingest_protocol_outputs,
+    record_comparison_claim,
+)
+from protocol_optimization_agent.scientific_reasoning import scientific_preconditions
+from protocol_optimization_agent.scientific_state import ScientificWorldModel
 from protocol_optimization_agent.tools.external_data_tools import build_external_tool_inventory
 from protocol_optimization_agent.tools.h5ad_tools import DATA_ANALYSIS_TOOL_REGISTRY
 
@@ -49,6 +58,12 @@ Routing policy:
 - Use Data Analysis Agent for questions about h5ad, AnnData, single-cell expression, marker expression, cell composition, maturity, similarity, trajectories, or reference atlases.
 - Use Protocol Optimizing Agent for requests to improve, optimize, rank, recommend, or propose protocol changes. If needed, call protocol and data agents first for context.
 - Never turn associations into causal claims. Every optimization answer must state that recommendations are hypotheses requiring experimental validation.
+- Read inspect_scientific_state for prior hypotheses, conflicts, and experimental feedback.
+- Use describe_scientific_actions and execute_scientific_action for registered, preconditioned actions.
+- Separate execution readiness from scientific comparability. Unknown metadata cannot pass a scientific gate.
+- Return next experiment candidates for researcher review, not an optimal protocol.
+- Never approve experiments, invent experimental outcomes, or overwrite deterministic numeric results.
+- protocol.extract is deferred until the owner's Protocol_extraction workflow is connected.
 
 Runtime context:
 - protocol_output_dir: {protocol_output_dir}
@@ -75,6 +90,7 @@ class OrchestratorState(TypedDict, total=False):
     trace_id: str
     workspace_root: str
     max_features: int
+    project_id: str
 
 
 SUBAGENT_REGISTRY: dict[str, dict[str, Any]] = {
@@ -160,17 +176,30 @@ def protocol_analysis_agent(
     question: str,
     protocol_output_dir: Annotated[str, InjectedState("protocol_output_dir")],
     max_features: Annotated[int, InjectedState("max_features")],
+    request: dict[str, Any] | None = None,
     user_id: Annotated[str, InjectedState("user_id")] = "",
     run_id: Annotated[str, InjectedState("run_id")] = "",
     trace_id: Annotated[str, InjectedState("trace_id")] = "",
     workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
+    project_id: Annotated[str, InjectedState("project_id")] = "default",
 ) -> dict[str, Any]:
     """Delegate protocol lookup, comparison, matrix, event, evidence, or visualization questions to Protocol Analysis Agent."""
 
     context = RunContext.from_values(user_id=user_id, run_id=run_id, trace_id=trace_id, workspace_root=workspace_root)
     output_dir = _protocol_output_dir(protocol_output_dir, context)
     engine = ProtocolQueryEngine(Path(output_dir))
-    result = engine.answer_question(question, max_features=max_features)
+    if request and request.get("protocol_id_a") and request.get("protocol_id_b"):
+        comparison = engine.compare_protocols(str(request["protocol_id_a"]), str(request["protocol_id_b"]), max_features)
+        result = {"status": comparison.get("status", "not_found"), "intent": "compare_protocols", "tool_result": comparison}
+    else:
+        result = engine.answer_question(question, max_features=max_features)
+    store = ScientificWorldModel(context, project_id)
+    comparison = result.get("tool_result", {})
+    protocol_ids = {str(comparison.get(key, {}).get("protocol_id") or "") for key in ("protocol_a", "protocol_b")} - {""}
+    protocol_rows = [row for protocol_id in sorted(protocol_ids) for row in engine.query_matrix(filters={"protocol_id": protocol_id})]
+    preconditions = scientific_preconditions(protocol_rows, [], purpose="descriptive_comparison") if protocol_ids else {}
+    world_update = ingest_protocol_outputs(store, Path(output_dir), protocol_ids or None)
+    record_comparison_claim(store, result, preconditions)
     selected_operation = str(result.get("intent") or "protocol_query")
     output_files = {
         "protocol_feature_matrix": str(Path(output_dir) / "protocol_feature_matrix.csv"),
@@ -200,11 +229,15 @@ def protocol_analysis_agent(
         used_tools=_protocol_used_tools(result),
         used_features=_protocol_used_features(result),
         evidence_refs=_protocol_evidence_refs(result),
-        confidence_caveats=_protocol_confidence_caveats(result),
+        confidence_caveats=[*_protocol_confidence_caveats(result), *(
+            ["This is a descriptive comparison. Metadata are insufficient for causal or matched-phenotype inference."]
+            if preconditions and not preconditions.get("scientific_ready") else []
+        )],
         result_preview=result,
         output_files=output_files,
         provenance={"output_dir": output_dir},
-        extra={"result": result, "output_dir": output_dir},
+        extra={"result": result, "output_dir": output_dir, "scientific_preconditions": preconditions,
+               "scientific_state": world_update},
     )
 
 
@@ -220,6 +253,7 @@ def data_analysis_agent(
     run_id: Annotated[str, InjectedState("run_id")] = "",
     trace_id: Annotated[str, InjectedState("trace_id")] = "",
     workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
+    project_id: Annotated[str, InjectedState("project_id")] = "default",
 ) -> dict[str, Any]:
     """Delegate h5ad, marker, composition, maturity, reference similarity, trajectory, or QC questions to Data Analysis Agent."""
 
@@ -232,6 +266,7 @@ def data_analysis_agent(
         DataAnalysisAgent(output_dir=output_dir, h5ad_config=effective_h5ad_config).run(h5ad_manifest_rows or [])
     comparison_report = read_json(output_dir / "data_analysis_comparison_report.json")
     limitations = read_json(output_dir / "h5ad_analysis_limitations.json")
+    validation = read_json(output_dir / "data_analysis_validation.json")
     tool_registry = read_json(output_dir / "data_analysis_tool_registry.json")
     summaries = read_jsonl(output_dir / "h5ad_summary_by_protocol.jsonl")
     protocol_summary_rows = read_csv_dicts(output_dir / "data_analysis_protocol_summary.csv")
@@ -242,6 +277,7 @@ def data_analysis_agent(
     cached_rows = read_csv_dicts(output_dir / selected_output)
     result_preview = _filter_data_result_rows(cached_rows, structured_request)[:50]
     status = _data_tool_status(existing_outputs, selected_output, cached_rows, result_preview, structured_request)
+    world_update = ingest_phenotype_outputs(ScientificWorldModel(context, project_id), output_dir)
     output_files = {
         "selected": str(output_dir / selected_output),
         "summary": str(output_dir / "data_analysis_comparison_report.json"),
@@ -275,7 +311,9 @@ def data_analysis_agent(
         used_tools=[_data_operation_tool_name(selected_operation)],
         used_features=_data_used_features(selected_operation, result_preview),
         evidence_refs=_data_evidence_refs(summaries[:50]),
-        confidence_caveats=_data_confidence_caveats(status, limitations.get("limitations", [])),
+        confidence_caveats=_data_confidence_caveats(
+            status, limitations.get("limitations", []), validation
+        ),
         limitations=limitations.get("limitations", [])[:50],
         provenance=_data_analysis_provenance(summaries[:50]),
         result_preview=result_preview,
@@ -284,6 +322,7 @@ def data_analysis_agent(
             "structured_request": structured_request,
             "output_dir": str(output_dir),
             "summary": comparison_report.get("summary", {}),
+            "validation": validation,
             "protocol_summaries": protocol_summary_rows[:50],
             "dataset_summaries": summaries[:50],
             "tool_registry": tool_registry.get("tools", DATA_ANALYSIS_TOOL_REGISTRY),
@@ -292,6 +331,9 @@ def data_analysis_agent(
             ),
             "callable_tools": tool_registry.get("callable_tools", []),
             "available_output_files": existing_outputs,
+            "scientific_state": world_update,
+            "phenotype_ir": read_json(output_dir / "phenotype_ir.json"),
+            "phenotype_interpretation": read_json(output_dir / "phenotype_interpretation.json"),
         },
     )
 
@@ -317,6 +359,7 @@ def protocol_optimizing_agent(
     run_id: Annotated[str, InjectedState("run_id")] = "",
     trace_id: Annotated[str, InjectedState("trace_id")] = "",
     workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
+    project_id: Annotated[str, InjectedState("project_id")] = "default",
 ) -> dict[str, Any]:
     """Delegate integrated protocol-improvement, ranking, recommendation, or optimization questions to Protocol Optimizing Agent."""
 
@@ -324,6 +367,7 @@ def protocol_optimizing_agent(
     protocol_dir = Path(_protocol_output_dir(protocol_output_dir, context))
     data_dir = Path(_data_analysis_output_dir(data_analysis_output_dir, context))
     optimization_dir = Path(_optimization_output_dir(optimization_output_dir, context))
+    store = ScientificWorldModel(context, project_id)
     orchestration_plan = build_optimization_orchestration_plan(
         protocol_dir,
         data_dir,
@@ -353,10 +397,14 @@ def protocol_optimizing_agent(
             force_data_rerun=False,
             force_optimization_rerun=force_optimization_rerun,
         )
-    cache_key = _optimization_cache_key(protocol_dir, data_dir, objective or {}, new_protocol_features or {})
+    ingest_protocol_outputs(store, protocol_dir)
+    ingest_phenotype_outputs(store, data_dir)
+    scientific_context = store.reasoning_context()
+    cache_key = _optimization_cache_key(protocol_dir, data_dir, objective or {}, new_protocol_features or {}, store.feedback_fingerprint())
     cache_meta = _read_optional_json(optimization_dir / "optimization_cache_metadata.json")
     has_cached_optimization = (
         (optimization_dir / "proposed_improved_protocol.json").exists()
+        and (optimization_dir / "next_experiment_candidates.json").exists()
         and cache_meta.get("cache_key") == cache_key
     )
     should_run = orchestration_plan["can_run_protocol_optimizing_agent"] and (
@@ -368,6 +416,7 @@ def protocol_optimizing_agent(
             data_dir,
             objective=objective,
             new_protocol_features=new_protocol_features,
+            scientific_context=scientific_context,
         )
         _write_optimization_cache_metadata(optimization_dir, cache_key, objective or {}, new_protocol_features or {})
     recommendation_json = _read_optional_json(optimization_dir / "proposed_improved_protocol.json")
@@ -375,6 +424,8 @@ def protocol_optimizing_agent(
     risk_report = _read_optional_json(optimization_dir / "evidence_and_risk_report.json")
     candidates = read_csv_dicts(optimization_dir / "optimization_candidate_features.csv")
     prediction = _read_optional_json(optimization_dir / "counterfactual_protocol_predictions.json")
+    next_experiments = _read_optional_json(optimization_dir / "next_experiment_candidates.json") if should_run or has_cached_optimization else {}
+    world_update = ingest_experiment_proposals(store, optimization_dir) if next_experiments else {"path": str(store.path), "status": "not_generated"}
     status = _optimization_tool_status(
         bool(orchestration_plan["can_run_protocol_optimizing_agent"]),
         bool(recommendation_json or recommendation_md),
@@ -385,6 +436,7 @@ def protocol_optimizing_agent(
         "proposed_protocol_md": str(optimization_dir / "proposed_improved_protocol.md"),
         "evidence_and_risk_report": str(optimization_dir / "evidence_and_risk_report.json"),
         "candidate_features": str(optimization_dir / "optimization_candidate_features.csv"),
+        "next_experiment_candidates": str(optimization_dir / "next_experiment_candidates.json"),
     }
     append_tool_call_log(
         context,
@@ -432,6 +484,7 @@ def protocol_optimizing_agent(
             "counterfactual_prediction": prediction,
             "cache_key": cache_key,
             "cache_status": "hit" if has_cached_optimization and not should_run else "miss_or_rerun",
+            "next_experiment_candidates": next_experiments,
         },
         output_files=output_files,
         extra={
@@ -443,8 +496,73 @@ def protocol_optimizing_agent(
             "evidence_and_risk_report": risk_report,
             "top_candidate_features": candidates[:20],
             "counterfactual_prediction": prediction,
+            "next_experiment_candidates": next_experiments,
+            "scientific_state": world_update,
         },
     )
+
+
+@tool
+def describe_scientific_actions() -> dict[str, Any]:
+    """List versioned scientific actions, their inputs, preconditions, and availability."""
+    return action_registry()
+
+
+@tool
+def inspect_scientific_state(
+    limit: int = 20,
+    user_id: Annotated[str, InjectedState("user_id")] = "",
+    run_id: Annotated[str, InjectedState("run_id")] = "",
+    trace_id: Annotated[str, InjectedState("trace_id")] = "",
+    workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
+    project_id: Annotated[str, InjectedState("project_id")] = "default",
+) -> dict[str, Any]:
+    """Read versioned scientific evidence, hypotheses, experimental outcomes, and conflicts."""
+    context = RunContext.from_values(user_id=user_id, run_id=run_id, trace_id=trace_id, workspace_root=workspace_root)
+    store = ScientificWorldModel(context, project_id)
+    result = store.snapshot(limit)
+    append_tool_call_log(context, subagent="orchestrator", operation="inspect_scientific_state", status="ok",
+                        question="Inspect scientific state", output_files={"scientific_state": str(store.path)})
+    return result
+
+
+@tool
+def execute_scientific_action(
+    action_id: str,
+    arguments: dict[str, Any],
+    protocol_output_dir: Annotated[str, InjectedState("protocol_output_dir")],
+    data_analysis_output_dir: Annotated[str, InjectedState("data_analysis_output_dir")],
+    optimization_output_dir: Annotated[str, InjectedState("optimization_output_dir")],
+    max_features: Annotated[int, InjectedState("max_features")],
+    user_id: Annotated[str, InjectedState("user_id")] = "",
+    run_id: Annotated[str, InjectedState("run_id")] = "",
+    trace_id: Annotated[str, InjectedState("trace_id")] = "",
+    workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
+    project_id: Annotated[str, InjectedState("project_id")] = "default",
+) -> dict[str, Any]:
+    """Execute one available registered action using server-injected runtime context."""
+    action = get_action(action_id)
+    if action.availability != "available":
+        return {"status": action.availability, "action": action.model_dump(), "executed": False}
+    if set(arguments) - set(action.inputs):
+        raise ValueError("Action arguments contain undeclared fields.")
+    if any(not arguments.get(key) for key in action.required_inputs):
+        raise ValueError(f"Required action inputs: {action.required_inputs}")
+    injected = {"user_id": user_id, "run_id": run_id, "trace_id": trace_id,
+                "workspace_root": workspace_root, "project_id": project_id}
+    if action_id == "scientific.state":
+        return inspect_scientific_state.invoke({**arguments, **injected})
+    if action.agent == "PA":
+        return protocol_analysis_agent.invoke({"question": arguments.get("question", "Compare protocols"),
+            "request": arguments if action_id == "protocol.compare" else None,
+            "protocol_output_dir": protocol_output_dir, "max_features": max_features, **injected})
+    if action.agent == "DA":
+        return data_analysis_agent.invoke({**arguments, "question": arguments.get("question", action.id),
+            "request": {**arguments.get("request", {}), "operation": action.operation},
+            "data_analysis_output_dir": data_analysis_output_dir, **injected})
+    return protocol_optimizing_agent.invoke({**arguments, "question": arguments.get("question", "Propose next experiments"),
+        "protocol_output_dir": protocol_output_dir, "data_analysis_output_dir": data_analysis_output_dir,
+        "optimization_output_dir": optimization_output_dir, **injected})
 
 
 ORCHESTRATOR_TOOLS = [
@@ -452,6 +570,9 @@ ORCHESTRATOR_TOOLS = [
     protocol_analysis_agent,
     data_analysis_agent,
     protocol_optimizing_agent,
+    describe_scientific_actions,
+    inspect_scientific_state,
+    execute_scientific_action,
 ]
 
 
@@ -470,6 +591,7 @@ def _optimization_cache_key(
     data_dir: Path,
     objective: dict[str, Any],
     new_protocol_features: dict[str, Any],
+    feedback_fingerprint: str = "",
 ) -> str:
     return content_fingerprint(
         {
@@ -482,11 +604,25 @@ def _optimization_cache_key(
             "differential_expression": str(data_dir / "differential_expression.csv"),
             "maturity_scores": str(data_dir / "maturity_scores.csv"),
             "similarity_scores": str(data_dir / "similarity_scores.csv"),
+            "phenotype_ir": str(data_dir / "phenotype_ir.json"),
+            "data_validation": str(data_dir / "data_analysis_validation.json"),
+            "phenotype_interpretation": str(data_dir / "phenotype_interpretation.json"),
+            "cell_type_composition": str(data_dir / "cell_type_composition.csv"),
+            "gene_program_scores": str(data_dir / "gene_program_scores.csv"),
+            "regulatory_program_scores": str(data_dir / "regulatory_program_scores.csv"),
+            "trajectory_scores": str(data_dir / "trajectory_scores.csv"),
+            "h5ad_dataset_metadata": str(data_dir / "h5ad_summary_by_protocol.jsonl"),
+            "normalized_events": str(protocol_dir / "normalized_factor_events.jsonl"),
+            "filtered_events": str(protocol_dir / "filtered_protocol_factor_events.csv"),
+            "experiment_design_code": str(Path(__file__).with_name("scientific_reasoning.py")),
+            "scientific_model_code": str(Path(__file__).with_name("scientific_models.py")),
+            "optimization_code": str(Path(__file__).parent / "agents" / "protocol_optimizing.py"),
         },
         extra={
             "objective": objective,
             "new_protocol_features": new_protocol_features,
-            "output_contract": "protocol-optimization-v1",
+            "output_contract": "protocol-optimization-scientific-v2",
+            "experimental_feedback": feedback_fingerprint,
         },
     )
 
@@ -543,6 +679,8 @@ def _configure_node(state: OrchestratorState) -> OrchestratorState:
         trace_id=state.get("trace_id"),
         workspace_root=state.get("workspace_root"),
     )
+    project_id = state.get("project_id") or os.getenv("PROTOCOL_RESEARCH_PROJECT_ID") or "default"
+    ScientificWorldModel(context, project_id)
     protocol_output_dir = resolve_agent_output_dir(
         "protocol_analysis",
         state.get("protocol_output_dir"),
@@ -583,6 +721,7 @@ def _configure_node(state: OrchestratorState) -> OrchestratorState:
         "trace_id": context.trace_id,
         "workspace_root": str(context.workspace_root),
         "max_features": int(state.get("max_features") or os.getenv("PROTOCOL_QUERY_MAX_FEATURES") or 40),
+        "project_id": project_id,
     }
 
 
@@ -590,13 +729,20 @@ def _orchestrator_node(model: Runnable | None):
     def run(state: OrchestratorState) -> OrchestratorState:
         if model is None:
             return _offline_orchestrator_response(state)
+        context = RunContext.from_values(user_id=state.get("user_id"), run_id=state.get("run_id"),
+                                         trace_id=state.get("trace_id"), workspace_root=state.get("workspace_root"))
+        scientific_context = ScientificWorldModel(context, state.get("project_id", "default")).reasoning_context()
         system = SystemMessage(
             content=SYSTEM_PROMPT.format(
                 protocol_output_dir=state.get("protocol_output_dir", DEFAULT_PROTOCOL_OUTPUT_DIR),
                 data_analysis_output_dir=state.get("data_analysis_output_dir", DEFAULT_DATA_ANALYSIS_OUTPUT_DIR),
                 optimization_output_dir=state.get("optimization_output_dir", DEFAULT_OPTIMIZATION_OUTPUT_DIR),
                 max_features=int(state.get("max_features") or 40),
-            )
+            ) + "\nScientific state (use inspect_scientific_state for details):\n" + json.dumps({
+                "project_id": state.get("project_id", "default"),
+                "n_hypotheses": len(scientific_context["hypotheses"]),
+                "hypotheses_preview": scientific_context["hypotheses"][:10],
+            }, ensure_ascii=True)
         )
         response = model.invoke([system, *state.get("messages", [])])
         return {**state, "messages": [response]}
@@ -607,7 +753,10 @@ def _orchestrator_node(model: Runnable | None):
 def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorState:
     question = _last_human_content(state.get("messages", []))
     route = classify_route(question)
-    if route == "protocol_analysis_agent":
+    if route == "inspect_scientific_state":
+        result = inspect_scientific_state.invoke({key: state.get(key, "default" if key == "project_id" else "")
+            for key in ("user_id", "run_id", "trace_id", "workspace_root", "project_id")})
+    elif route == "protocol_analysis_agent":
         result = protocol_analysis_agent.invoke(
             {
                 "question": question,
@@ -617,6 +766,7 @@ def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorStat
                 "run_id": state.get("run_id", ""),
                 "trace_id": state.get("trace_id", ""),
                 "workspace_root": state.get("workspace_root", ""),
+                "project_id": state.get("project_id", "default"),
             }
         )
     elif route == "data_analysis_agent":
@@ -628,6 +778,7 @@ def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorStat
                 "run_id": state.get("run_id", ""),
                 "trace_id": state.get("trace_id", ""),
                 "workspace_root": state.get("workspace_root", ""),
+                "project_id": state.get("project_id", "default"),
             }
         )
     else:
@@ -641,6 +792,7 @@ def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorStat
                 "run_id": state.get("run_id", ""),
                 "trace_id": state.get("trace_id", ""),
                 "workspace_root": state.get("workspace_root", ""),
+                "project_id": state.get("project_id", "default"),
             }
         )
     content = (
@@ -652,7 +804,7 @@ def _offline_orchestrator_response(state: OrchestratorState) -> OrchestratorStat
 
 def classify_route(
     question: str,
-) -> Literal["protocol_analysis_agent", "data_analysis_agent", "protocol_optimizing_agent"]:
+) -> Literal["protocol_analysis_agent", "data_analysis_agent", "protocol_optimizing_agent", "inspect_scientific_state"]:
     normalized = question.lower()
     optimization_terms = (
         "优化",
@@ -693,6 +845,8 @@ def classify_route(
     )
     if any(term in normalized for term in optimization_terms):
         return "protocol_optimizing_agent"
+    if any(term in normalized for term in ("world model", "scientific state", "科研状态", "查看假设", "实验历史", "证据冲突")):
+        return "inspect_scientific_state"
     if any(term in normalized for term in data_terms):
         return "data_analysis_agent"
     return "protocol_analysis_agent"
@@ -948,12 +1102,18 @@ def _data_evidence_refs(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]
     ]
 
 
-def _data_confidence_caveats(status: str, limitations: list[dict[str, Any]]) -> list[str]:
+def _data_confidence_caveats(
+    status: str, limitations: list[dict[str, Any]], validation: dict[str, Any] | None = None
+) -> list[str]:
     caveats: list[str] = []
     if status != "ok":
         caveats.append(f"Data Analysis Agent returned status={status}.")
     if limitations:
         caveats.append("Data Analysis Agent reported limitations; inspect h5ad_analysis_limitations.json.")
+    if validation and validation.get("po_ready") is not True:
+        caveats.append("Data Analysis outputs did not pass the deterministic Protocol Optimizing readiness gate.")
+    if validation:
+        caveats.append("Any LLM-authored quality score is qualitative commentary, not a statistical confidence probability.")
     return caveats
 
 

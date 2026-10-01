@@ -44,6 +44,7 @@ protocol-optimization-agent = "protocol_optimization_agent.cli:main"
 protocol-analysis-agent = "protocol_optimization_agent.protocol_analysis_cli:main"
 protocol-query = "protocol_optimization_agent.protocol_query_cli:main"
 protocol-api = "protocol_optimization_agent.api:main"
+scientific-state = "protocol_optimization_agent.scientific_state_cli:main"
 
 [tool.setuptools.package-dir]
 "" = "backend"

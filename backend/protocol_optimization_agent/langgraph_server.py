@@ -17,7 +17,7 @@ DEFAULT_OUTPUT_DIR = "runs/protocol_analysis_agent_simplified_autofeatures"
 
 SYSTEM_PROMPT = """You are ProtocolOptimizationAgent, a tool-using scientific protocol analysis assistant.
 
-You answer only from the generated Protocol Analysis Agent outputs exposed by tools. Do not re-read papers, invent protocol facts, or use memory as evidence. For protocol comparison questions, first resolve protocol names with find_protocols, then call compare_protocols, and call evidence tools when a claim needs support.
+You answer only from the generated Protocol Analysis Agent outputs exposed by tools. Do not re-read papers, invent protocol facts, or use memory as evidence. For protocol collection, inventory, count, or "how many protocols" questions, call get_protocol_collection_summary. For protocol comparison questions, first resolve protocol names with find_protocols, then call compare_protocols, and call evidence tools when a claim needs support.
 
 When answering, summarize the tool results in clear scientific language and include the relevant protocol ids, feature names, evidence/provenance availability, confidence or audit caveats when present. Correlation or protocol-design differences must not be presented as causal claims.
 
@@ -41,6 +41,13 @@ def _output_dir(value: str | None = None) -> str:
 
 def _engine(output_dir: str | None = None) -> ProtocolQueryEngine:
     return ProtocolQueryEngine(Path(_output_dir(output_dir)))
+
+
+@tool
+def get_protocol_collection_summary(output_dir: Annotated[str, InjectedState("output_dir")]) -> dict[str, Any]:
+    """Summarize the configured protocol analysis collection: protocol count, comparable count, features, papers, and datasets."""
+
+    return _engine(output_dir).get_protocol_collection_summary()
 
 
 @tool
@@ -169,6 +176,7 @@ def propose_feature_specs_context(
 
 
 TOOLS = [
+    get_protocol_collection_summary,
     find_protocols,
     compare_protocols,
     get_protocol_events,

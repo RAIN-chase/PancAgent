@@ -7,7 +7,9 @@ ProtocolOptimizationAgent is a downstream multi-agent framework for improving pa
 - per-protocol h5ad single-cell analysis results
 - maturity, similarity, marker, composition, QC, and trajectory summaries
 
-The framework is intentionally small: three domain agents plus one lightweight orchestrator.
+The framework is intentionally small: three domain agents plus one lightweight orchestrator, sharing a versioned Scientific World Model.
+
+Scientific state, Phenotype IR, registered actions, next-experiment selection and researcher feedback commands are documented in [docs/scientific_world_model.md](docs/scientific_world_model.md). PA's future `Protocol_extraction` workflow integration and final intervention IR design are deferred.
 
 Mandatory commit rules are documented in [CONTRIBUTING.md](E:/workspace/Pancreas/Agents_test/CONTRIBUTING.md). Every commit must check code correctness and comment quality before staging.
 
@@ -114,14 +116,14 @@ For LAN access, do not use `0.0.0.0` in the browser or frontend env. Use the mac
 
 ```env
 NEXT_PUBLIC_API_URL=http://10.203.168.222:2024
-NEXT_PUBLIC_ASSISTANT_ID=protocol_chat
+NEXT_PUBLIC_ASSISTANT_ID=orchestrator
 NEXT_PUBLIC_AUTH_SCHEME=
 ```
 
 Start the Next.js frontend from the repository root:
 
 ```powershell
-.\scripts\start_frontend.ps1 -HostAddress 0.0.0.0 -Port 5173
+.\scripts\start_frontend.ps1 -HostAddress 0.0.0.0 -Port 5173 -LangGraphApiUrl "http://10.203.168.222:2024" -AssistantId "orchestrator"
 ```
 
 Open the frontend with the real host address, for example `http://10.203.168.222:5173`. If the browser previously stored another LangGraph URL, clear the agent-chat-ui setup in browser local storage or enter the LAN API URL again.
@@ -225,9 +227,10 @@ Protocol Analysis Agent outputs:
 Query Protocol Analysis Agent outputs:
 
 ```bash
-protocol-query --output-dir runs/protocol_analysis_agent_run find "Akgün 2024"
-protocol-query --output-dir runs/protocol_analysis_agent_run compare protocol_a protocol_b
-protocol-query --output-dir runs/protocol_analysis_agent_run chat "Akgün 2024 和 Sakuma 2023 protocols 有什么区别？"
+protocol-query collection
+protocol-query find "Akgün 2024"
+protocol-query compare protocol_a protocol_b
+protocol-query chat "Akgün 2024 和 Sakuma 2023 protocols 有什么区别？"
 ```
 
 The query layer reads only generated structured outputs such as `protocol_feature_matrix.csv`, `normalized_factor_events.jsonl`, `semantic_stage_annotations.jsonl`, provenance, relationship, and audit reports. It does not re-read papers or infer unsupported facts.

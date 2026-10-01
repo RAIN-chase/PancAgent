@@ -55,6 +55,7 @@ H5AD_ANALYSIS_SUBGRAPH = SubgraphSpec(
         "external_tool_inventory": "Downloaded external tool inventory",
         "aggregate_quantitative_comparison": "Dataset quantitative comparison aggregation",
         "data_analysis_audit": "Data analysis limitations audit",
+        "phenotype_representation": "Numeric Phenotype IR and optional interpretation consensus",
     },
     edges=(
         ("data_input_gate", "dataset_inventory_builder", None),
@@ -67,6 +68,7 @@ H5AD_ANALYSIS_SUBGRAPH = SubgraphSpec(
         ("regulatory_and_trajectory_placeholders", "external_tool_inventory", None),
         ("external_tool_inventory", "aggregate_quantitative_comparison", None),
         ("aggregate_quantitative_comparison", "data_analysis_audit", None),
+        ("data_analysis_audit", "phenotype_representation", "one numerical snapshot; independent interpretations"),
     ),
 )
 
@@ -82,6 +84,7 @@ PROTOCOL_OPTIMIZING_SUBGRAPH = SubgraphSpec(
         "mechanistic_evidence_ranker": "Mechanism and provenance ranking",
         "counterfactual_protocol_scorer": "Nearest-neighbor new protocol scorer",
         "optimized_protocol_generator": "Hypothesis-only protocol proposal builder",
+        "experiment_design": "Generate, critique, compare, rank, and select experiment candidates",
         "optimization_audit": "Evidence, uncertainty, and risk audit",
         "export_results": "Export optimization contracts",
     },
@@ -92,7 +95,8 @@ PROTOCOL_OPTIMIZING_SUBGRAPH = SubgraphSpec(
         ("protocol_phenotype_association_analyzer", "mechanistic_evidence_ranker", "association, not causality"),
         ("mechanistic_evidence_ranker", "counterfactual_protocol_scorer", None),
         ("counterfactual_protocol_scorer", "optimized_protocol_generator", "relative prediction only"),
-        ("optimized_protocol_generator", "optimization_audit", None),
+        ("optimized_protocol_generator", "experiment_design", "scientific comparability + explicit decision assessments"),
+        ("experiment_design", "optimization_audit", "researcher review required"),
         ("optimization_audit", "export_results", None),
     ),
 )

@@ -71,6 +71,10 @@ Compatibility rule:
 
 ## Cache And Readiness
 
+Scientific state is project-scoped across runs at `{workspace_root}/users/{user_id}/research/{project_id}/scientific_state.sqlite3`. Production services must authorize project access and bind user identity server-side. SQLite revisions and researcher lifecycle transitions are transactional; immutable evidence and version history must be retained. See [scientific_world_model.md](scientific_world_model.md) for the implemented contracts and operator workflow.
+
+Execution readiness does not establish scientific comparability. Missing cell line, stage, modality, reference or phenotype scale metadata must remain unknown. Experiment shortlist eligibility requires scientific preconditions and explicit sourced decision assessments. Chat tools cannot approve an experiment or supply wet-lab feedback. The researcher's CLI is an explicit local operator interface, not production authentication.
+
 Readiness must validate output content, not just file presence.
 
 Current checks:
@@ -84,6 +88,7 @@ Rules:
 
 - Changing `objective` invalidates cached Protocol Optimizing Agent results.
 - Changing PA/DA output content invalidates cached Protocol Optimizing Agent results.
+- Researcher experiment reviews and experimental feedback invalidate cached PO experiment-design results.
 - A Data Analysis query with requested genes, groups, protocol, dataset, sample, or condition must not return unrelated cached rows.
 - If cached rows exist but do not match the structured request, return `no_matching_cached_result` unless structured inputs are provided for execution.
 - If upstream inputs are provided to the Orchestrator optimization tool, missing PA/DA outputs may be generated before PO readiness is rebuilt.

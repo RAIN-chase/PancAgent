@@ -6,6 +6,13 @@ from pathlib import Path
 
 import pytest
 from protocol_optimization_agent.agents.protocol_optimizing import ProtocolOptimizingAgent
+from protocol_optimization_agent.runtime import RunContext
+from protocol_optimization_agent.scientific_ingestion import (
+    ingest_experiment_proposals,
+    ingest_phenotype_outputs,
+    ingest_protocol_outputs,
+)
+from protocol_optimization_agent.scientific_state import ScientificWorldModel
 
 
 def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path: Path) -> None:
@@ -146,6 +153,12 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
     assert proposal["protocol_edits"][0]["target_stage"] == "maturation"
     assert proposal["protocol_edits"][0]["evidence_refs"]
     assert proposal["protocol_edits"][0]["negative_controls"]
+    experiments = json.loads(outputs["next_experiment_candidates"].read_text(encoding="utf-8"))
+    assert experiments["reasoning_steps"] == ["generate", "critique", "compare", "rank", "select"]
+    assert experiments["candidates"]
+    assert experiments["selected_for_review"] == []
+    assert experiments["scientific_preconditions"]["scientific_ready"] is False
+    assert experiments["hypotheses"][0]["status"] == "UNRESOLVED"
 
     prediction = json.loads(outputs["counterfactual_protocol_predictions"].read_text(encoding="utf-8"))
     assert prediction["status"] == "similar_protocol_reference_scored"
@@ -164,3 +177,10 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
     assert stress_target["normalization"].startswith("minmax_by_endpoint:")
     assert float(stress_target["raw_score"]) == pytest.approx(0.9)
     assert float(stress_target["objective_score"]) == pytest.approx(0.0)
+    store = ScientificWorldModel(RunContext.from_values(user_id="test_user", run_id="r1", workspace_root=tmp_path), "study")
+    ingest_protocol_outputs(store, protocol_dir)
+    ingest_phenotype_outputs(store, data_dir)
+    ingest_experiment_proposals(store, output_dir)
+    assert store.snapshot()["counts"]["hypothesis"] == len(experiments["hypotheses"])
+    assert store.snapshot()["counts"]["experiment"] == len(experiments["candidates"])
+    assert all(not h["evidence_for"] for h in store.snapshot()["records"]["hypothesis"])

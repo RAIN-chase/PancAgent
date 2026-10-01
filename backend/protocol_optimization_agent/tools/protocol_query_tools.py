@@ -6,6 +6,10 @@ from typing import Any
 from protocol_optimization_agent.query_engine import ProtocolQueryEngine
 
 
+def get_protocol_collection_summary(output_dir: Path | str) -> dict[str, Any]:
+    return ProtocolQueryEngine(output_dir).get_protocol_collection_summary()
+
+
 def find_protocols(output_dir: Path | str, query: str) -> list[dict[str, Any]]:
     return ProtocolQueryEngine(output_dir).find_protocols(query)
 

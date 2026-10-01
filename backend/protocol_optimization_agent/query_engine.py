@@ -71,6 +71,40 @@ class ProtocolQueryEngine:
             ),
         }
 
+    def get_protocol_collection_summary(self) -> dict[str, Any]:
+        rows = self.matrix_rows
+        feature_names = [key for key in rows[0] if key not in _metadata_keys()] if rows else []
+        comparison_ready_rows = [row for row in rows if _is_truthy(row.get("comparison_ready"))]
+        confidence_values = [_to_float(row.get("confidence_score")) for row in rows]
+        numeric_confidences = [value for value in confidence_values if value is not None]
+        release_gate = _read_json(self.output_dir / "matrix_release_gate_report.json")
+        return {
+            "status": "ok" if rows else "no_data",
+            "output_dir": str(self.output_dir),
+            "source_matrix": str(self.output_dir / "protocol_feature_matrix.csv"),
+            "n_protocols": len(rows),
+            "n_comparison_ready_protocols": len(comparison_ready_rows),
+            "n_features": len(feature_names),
+            "n_numeric_features": len(_select_numeric_features(rows, [], len(feature_names))) if rows else 0,
+            "n_papers": len({row.get("paper_id", "") for row in rows if row.get("paper_id")}),
+            "n_datasets": len({row.get("dataset_id", "") for row in rows if row.get("dataset_id")}),
+            "mean_confidence_score": round(sum(numeric_confidences) / len(numeric_confidences), 4)
+            if numeric_confidences
+            else None,
+            "release_gate_status": release_gate.get("status") or release_gate.get("release_status") or "",
+            "sample_protocols": [
+                {
+                    "protocol_id": row.get("protocol_id", ""),
+                    "paper_id": row.get("paper_id", ""),
+                    "dataset_id": row.get("dataset_id", ""),
+                    "protocol_name": row.get("protocol_name", ""),
+                    "comparison_ready": row.get("comparison_ready", ""),
+                    "confidence_score": row.get("confidence_score", ""),
+                }
+                for row in rows[:10]
+            ],
+        }
+
     def compare_protocols(self, protocol_id_a: str, protocol_id_b: str, max_features: int = 40) -> dict[str, Any]:
         matrix_by_protocol = self._matrix_by_protocol()
         left = matrix_by_protocol.get(protocol_id_a)
@@ -102,6 +136,14 @@ class ProtocolQueryEngine:
         }
 
     def answer_question(self, question: str, max_features: int = 30) -> dict[str, Any]:
+        if _is_collection_summary_question(question):
+            summary = self.get_protocol_collection_summary()
+            return {
+                "status": summary["status"],
+                "intent": "protocol_collection_summary",
+                "answer": _deterministic_collection_summary_answer(summary),
+                "tool_result": summary,
+            }
         candidates = _split_comparison_question(question)
         if len(candidates) >= 2:
             left_hits = self.find_protocols(candidates[0])
@@ -568,6 +610,40 @@ def _metadata_keys() -> set[str]:
     }
 
 
+def _is_collection_summary_question(question: str) -> bool:
+    text = question.lower()
+    normalized = _normalize_search_text(question)
+    count_terms = (
+        "多少",
+        "几",
+        "一共",
+        "总共",
+        "数量",
+        "可供比较",
+        "available",
+        "how many",
+        "count",
+        "inventory",
+        "collection",
+    )
+    protocol_terms = ("protocol", "protocols", "协议", "方案")
+    has_count_intent = any(term in text or term in normalized for term in count_terms)
+    has_protocol_scope = any(term in text or term in normalized for term in protocol_terms)
+    return has_count_intent and has_protocol_scope
+
+
+def _deterministic_collection_summary_answer(summary: dict[str, Any]) -> str:
+    if summary.get("status") != "ok":
+        return f"No protocol feature matrix was available at {summary.get('source_matrix', '')}."
+    return (
+        f"The configured Protocol Analysis output contains {summary.get('n_protocols', 0)} protocols, "
+        f"including {summary.get('n_comparison_ready_protocols', 0)} comparison-ready protocols. "
+        f"The matrix has {summary.get('n_features', 0)} feature columns "
+        f"({summary.get('n_numeric_features', 0)} numeric) from {summary.get('n_papers', 0)} papers "
+        f"and {summary.get('n_datasets', 0)} datasets. Source: {summary.get('source_matrix', '')}."
+    )
+
+
 def _split_comparison_question(question: str) -> list[str]:
     text = question.strip()
     for separator in (" vs ", " versus ", " 和 ", " 与 ", " and "):
@@ -645,6 +721,10 @@ def _search_score(query_norm: str, query_tokens: list[str], haystack_norm: str, 
         if not year_tokens.intersection(haystack_tokens):
             score *= 0.5
     return score
+
+
+def _is_truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:

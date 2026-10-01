@@ -1,5 +1,9 @@
 # Data Analysis Agent Tool Plan
 
+## Scientific State Integration (2026-09-30)
+
+DA now exports `phenotype_ir.json` and `phenotype_interpretation.json`. Numeric computation and scientific interpretation are separate: the IR preserves source values, method, units, logical sample/condition and row-level evidence. Optional 2-5 interpretation trajectories use copies of one numeric snapshot; no normalization, cell fractions or expression calculations are repeated by the interpreter. Disagreement, incomplete interpretations and invalid metric references require researcher review. The interpreter is disabled by default and can be enabled through `h5ad_config.interpretation` or an injected callback. See [scientific_world_model.md](scientific_world_model.md) for configuration and limits.
+
 This document defines the initial tool surface for quantitative comparison of pancreatic/islet organoid h5ad datasets against in vivo reference atlases.
 
 ## Agent Inputs
@@ -8,6 +12,24 @@ This document defines the initial tool surface for quantitative comparison of pa
 - `organoid_h5ad_manifest`: one row per organoid dataset, sample, condition, or protocol-linked h5ad.
 - `gene_programs`: manually curated lineage gene programs, grouped by lineage and program name.
 - `metadata_config`: obs column names for cell type, lineage, batch, donor, protocol, sample, condition, and embedding keys.
+
+Manifest rows describe logical cell subsets, not physical files. Multiple rows may point to one h5ad when `dataset_column`, `sample_column`, `condition_column`, or `protocol_column` distinguishes the cells. Leave a selector column empty when `dataset_id` is only an external identifier and does not equal values in `adata.obs`.
+
+## Execution Paths And Quality Gate
+
+`analysis_mode=standard` is the default. It uses the fixed, versioned tools below. `analysis_mode=exploratory` additionally accepts an `exploratory_analysis` bundle containing generated `script`, `environment`, `config`, `diagnostics`, and deterministic `validation_checks`. Generated code must run in an external sandbox; the Data Analysis Agent archives but does not execute arbitrary code in its main process.
+
+Every run writes `data_analysis_validation.json`. The Protocol Optimizing Agent may consume the outputs only when `validation_status` is `passed` and `po_ready` is `true`. The gate checks:
+
+- manifest dataset identity and h5ad path;
+- actual selected cells and recorded obs filters;
+- requested gene resolution against the chosen matrix source;
+- explicit and available `X`, layer, or `raw.X` source;
+- non-empty DE comparison groups;
+- explicit DE expression scale;
+- validated numeric maturity and reference-similarity outputs.
+
+The gate is deterministic readiness validation. LLM-authored quality labels are not statistical confidence probabilities.
 
 ## Current Framework Tools
 
@@ -37,7 +59,8 @@ Downloaded external sources:
 
 | Tool id | Current status | Output |
 | --- | --- | --- |
-| `dataset_manifest_gate` | implemented placeholder | `h5ad_qc_report.json` |
+| `dataset_manifest_gate` | implemented | `h5ad_qc_report.json` |
+| `exploratory_analysis_bundle` | implemented artifact/validation contract | `exploratory/*` |
 | `cell_type_composition` | implemented | `cell_type_composition.csv` |
 | `query_gene_expression` | implemented | `gene_expression_summary.csv` |
 | `differential_expression` | implemented | `differential_expression.csv` |
@@ -86,6 +109,16 @@ Server-side constraints:
 - Do not densify the full matrix by default; current tools only materialize one target-gene vector at a time.
 - Keep `.h5ad`, large `inputs/`, large `runs/`, and `external_tools/` out of commits.
 - Use Linux absolute paths in server manifests.
+
+Local test-data metadata observed on 2026-09-10 (files remain ignored and are not part of the production contract):
+
+| File | Shape | Useful selectors/annotations |
+| --- | ---: | --- |
+| `GSE143783_Weng_2020.h5ad` | 440,000 x 22,804 | `Dataset`, `sample`, `stage`, `condition`, `replicate`; no final cell-type annotation column observed |
+| `GSE268013_Meng_2025.h5ad` | 80,634 x 112,137 | `Dataset`, `sample`, `timepoint`; no final cell-type annotation column observed |
+| `PHASE_MT_1_6_Epi_final_20260908.h5ad` | 68,155 x 5,000 | `Dataset`, `sample`, `corrected_cell_label`, `cell_class`, `batch`; `counts` layer, `raw`, scVI/scANVI embeddings |
+
+These files validate backed metadata loading and flexible manifest slicing. They do not define future filenames or require one h5ad per organoid dataset. Before composition or cell-type matching is interpreted biologically, the two organoid test files still need a declared final annotation column or an updated annotated file.
 
 ## Recommended External Tool Categories
 
@@ -169,3 +202,9 @@ The agent should always export:
 - `external_tool_inventory.csv`
 - `data_analysis_query_result.json`
 - `h5ad_analysis_limitations.json`
+- `data_analysis_execution_plan.json`
+- `data_analysis_validation.json`
+- `exploratory/analysis.py`
+- `exploratory/environment.json`
+- `exploratory/config.json`
+- `exploratory/diagnostics.json`

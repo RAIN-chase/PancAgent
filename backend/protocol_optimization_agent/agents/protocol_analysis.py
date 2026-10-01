@@ -526,6 +526,10 @@ class ProtocolAnalysisAgent:
         write_csv_dicts(outputs["protocol_candidate_feature_matrix"], state.get("candidate_feature_rows", []))
         write_json(outputs["feature_cell_provenance"], state.get("feature_cell_provenance", {}))
         write_json(outputs["feature_discovery_audit_report"], state.get("feature_discovery_audit_report", {}))
+        write_json(
+            outputs["feature_spec_validation_report"],
+            state.get("feature_discovery_audit_report", {}).get("feature_spec_validation_report", {}),
+        )
         write_json(outputs["protocol_feature_provenance"], state.get("feature_provenance", {}))
         write_json(outputs["quantification_coverage_report"], state.get("quantification_coverage_report", {}))
         write_json(
@@ -568,6 +572,7 @@ class ProtocolAnalysisAgent:
             "protocol_candidate_feature_matrix": self.output_dir / "protocol_candidate_feature_matrix.csv",
             "feature_cell_provenance": self.output_dir / "feature_cell_provenance.json",
             "feature_discovery_audit_report": self.output_dir / "feature_discovery_audit_report.json",
+            "feature_spec_validation_report": self.output_dir / "feature_spec_validation_report.json",
             "protocol_feature_matrix": self.output_dir / "protocol_feature_matrix.csv",
             "protocol_feature_provenance": self.output_dir / "protocol_feature_provenance.json",
             "quantification_coverage_report": self.output_dir / "quantification_coverage_report.json",

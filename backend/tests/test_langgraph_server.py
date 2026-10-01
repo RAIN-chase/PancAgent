@@ -123,5 +123,6 @@ def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:
 
 
 def test_langgraph_server_exposes_heatmap_tool() -> None:
+    assert "get_protocol_collection_summary" in [tool.name for tool in TOOLS]
     assert "plot_protocol_feature_heatmap" in [tool.name for tool in TOOLS]
     assert "plot_layered_protocol_feature_heatmaps" in [tool.name for tool in TOOLS]

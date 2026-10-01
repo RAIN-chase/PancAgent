@@ -26,10 +26,15 @@ def test_orchestrator_subagents_are_registered() -> None:
         "protocol_analysis_agent",
         "data_analysis_agent",
         "protocol_optimizing_agent",
+        "describe_scientific_actions",
+        "inspect_scientific_state",
+        "execute_scientific_action",
     ]
 
 
 def test_orchestrator_route_classifier() -> None:
+    assert classify_route("Inspect scientific state") == "inspect_scientific_state"
+    assert classify_route("Use the world model to recommend next experiments") == "protocol_optimizing_agent"
     assert classify_route("比较 protocol A 和 protocol B 的差异") == "protocol_analysis_agent"
     assert classify_route("这个 h5ad 的 beta cell marker expression 怎么样") == "data_analysis_agent"
     assert classify_route("基于 protocol 和 h5ad 结果推荐一个优化方案") == "protocol_optimizing_agent"
@@ -218,6 +223,13 @@ def test_protocol_optimizing_cache_key_depends_on_objective(tmp_path: Path) -> N
         data_dir / "trajectory_scores.csv": "protocol_id,trajectory_score,status\np1,,pending\n",
         data_dir / "data_analysis_protocol_summary.csv": "protocol_id,n_datasets\np1,1\n",
         data_dir / "h5ad_summary_by_protocol.jsonl": json.dumps({"protocol_id": "p1"}) + "\n",
+        data_dir / "data_analysis_validation.json": json.dumps(
+            {
+                "schema_version": "data-analysis-validation-v1",
+                "validation_status": "passed",
+                "po_ready": True,
+            }
+        ),
     }.items():
         path.write_text(content, encoding="utf-8")
     (optimization_dir / "proposed_improved_protocol.json").write_text(
@@ -245,3 +257,56 @@ def test_protocol_optimizing_cache_key_depends_on_objective(tmp_path: Path) -> N
 
     assert result["status"] == "optimization_ran"
     assert "ProtocolOptimizingAgent.run" in result["used_tools"]
+
+
+def test_protocol_optimizing_tool_rejects_failed_data_validation(tmp_path: Path) -> None:
+    protocol_dir = tmp_path / "protocol_outputs"
+    data_dir = tmp_path / "data_outputs"
+    protocol_dir.mkdir()
+    data_dir.mkdir()
+    for name in (
+        "protocol_feature_matrix.csv",
+        "stage_factor_matrix_or_events_summary.csv",
+        "protocol_feature_provenance.json",
+    ):
+        (protocol_dir / name).write_text("nonempty\n", encoding="utf-8")
+    for name in (
+        "maturity_scores.csv",
+        "similarity_scores.csv",
+        "cell_type_composition.csv",
+        "marker_scores.csv",
+        "gene_program_scores.csv",
+        "regulatory_program_scores.csv",
+        "trajectory_scores.csv",
+        "data_analysis_protocol_summary.csv",
+        "h5ad_summary_by_protocol.jsonl",
+    ):
+        (data_dir / name).write_text("nonempty\n", encoding="utf-8")
+    (data_dir / "data_analysis_validation.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "data-analysis-validation-v1",
+                "validation_status": "failed",
+                "po_ready": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = protocol_optimizing_agent.invoke(
+        {
+            "question": "优化 protocol",
+            "protocol_output_dir": str(protocol_dir),
+            "data_analysis_output_dir": str(data_dir),
+            "optimization_output_dir": str(tmp_path / "optimization_outputs"),
+            "workspace_root": str(tmp_path),
+            "user_id": "test_user",
+            "run_id": "test_run",
+            "trace_id": "trace_test",
+        }
+    )
+
+    data_status = result["orchestration_plan"]["upstream_status"]["data_analysis_agent"]
+    assert result["status"] == "upstream_rerun_required"
+    assert data_status["ready"] is False
+    assert data_status["validation_errors"] == ["data_analysis_validation_failed"]

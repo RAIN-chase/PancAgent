@@ -5,6 +5,11 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from protocol_optimization_agent.io import read_csv_dicts, read_json, read_jsonl, write_csv_dicts, write_json
+from protocol_optimization_agent.scientific_reasoning import (
+    build_phenotype_ir,
+    design_experiments,
+    scientific_preconditions,
+)
 
 MIN_ASSOCIATION_PROTOCOLS = 5
 INTERVENTION_FEATURE_PREFIXES = (
@@ -58,6 +63,9 @@ class ProtocolOptimizingState(TypedDict, total=False):
     protocol_proposal: dict[str, Any]
     risk_report: dict[str, Any]
     validation_plan: dict[str, Any]
+    scientific_context: dict[str, Any]
+    scientific_preconditions: dict[str, Any]
+    next_experiments: dict[str, Any]
     outputs: dict[str, Path]
     step_log: list[dict[str, Any]]
 
@@ -85,12 +93,14 @@ class ProtocolOptimizingAgent:
         data_analysis_output_dir: Path | str,
         objective: dict[str, Any] | None = None,
         new_protocol_features: dict[str, Any] | None = None,
+        scientific_context: dict[str, Any] | None = None,
     ) -> dict[str, Path]:
         initial_state: ProtocolOptimizingState = {
             "protocol_output_dir": str(protocol_output_dir),
             "data_analysis_output_dir": str(data_analysis_output_dir),
             "objective": objective or self.objective,
             "new_protocol_features": new_protocol_features or {},
+            "scientific_context": scientific_context or {},
             "step_log": [],
         }
         final_state = self.build_langgraph().invoke(initial_state)
@@ -110,6 +120,7 @@ class ProtocolOptimizingAgent:
         graph.add_node("mechanistic_evidence_ranker", self._node_mechanistic_evidence_ranker)
         graph.add_node("counterfactual_protocol_scorer", self._node_counterfactual_protocol_scorer)
         graph.add_node("optimized_protocol_generator", self._node_optimized_protocol_generator)
+        graph.add_node("experiment_design", self._node_experiment_design)
         graph.add_node("optimization_audit", self._node_optimization_audit)
         graph.add_node("export_results", self._node_export_results)
 
@@ -120,7 +131,8 @@ class ProtocolOptimizingAgent:
         graph.add_edge("protocol_phenotype_association_analyzer", "mechanistic_evidence_ranker")
         graph.add_edge("mechanistic_evidence_ranker", "counterfactual_protocol_scorer")
         graph.add_edge("counterfactual_protocol_scorer", "optimized_protocol_generator")
-        graph.add_edge("optimized_protocol_generator", "optimization_audit")
+        graph.add_edge("optimized_protocol_generator", "experiment_design")
+        graph.add_edge("experiment_design", "optimization_audit")
         graph.add_edge("optimization_audit", "export_results")
         graph.add_edge("export_results", END)
         return graph.compile() if compile_graph else graph
@@ -158,6 +170,17 @@ class ProtocolOptimizingAgent:
             },
             "findings": _input_findings(protocol_feature_rows, data_tables, protocol_ids, data_protocol_ids),
         }
+        phenotype_ir = read_json(data_dir / "phenotype_ir.json") or build_phenotype_ir(
+            data_tables, data_tables["h5ad_summary_by_protocol"], read_json(data_dir / "data_analysis_validation.json"), str(data_dir),
+        )
+        preconditions = scientific_preconditions(protocol_feature_rows, phenotype_ir.get("phenotypes", []))
+        interpretation = read_json(data_dir / "phenotype_interpretation.json")
+        if interpretation.get("status") == "human_review_required":
+            preconditions["checks"].append({"name": "interpretation_consensus", "status": "human_review_required"})
+            preconditions.update({"status": "human_review_required", "scientific_ready": False})
+        report["execution_preconditions"] = {"joinable": bool(protocol_ids & data_protocol_ids),
+                                             "has_protocol_features": bool(protocol_feature_rows)}
+        report["scientific_preconditions"] = preconditions
         return {
             **state,
             "protocol_feature_rows": protocol_feature_rows,
@@ -165,6 +188,7 @@ class ProtocolOptimizingAgent:
             "feature_provenance": feature_provenance,
             "data_tables": data_tables,
             "input_gate_report": report,
+            "scientific_preconditions": preconditions,
             "step_log": _append_step(state, "integration_input_gate"),
         }
 
@@ -400,6 +424,14 @@ class ProtocolOptimizingAgent:
             "step_log": _append_step(state, "optimized_protocol_generator"),
         }
 
+    def _node_experiment_design(self, state: ProtocolOptimizingState) -> ProtocolOptimizingState:
+        report = design_experiments(state.get("protocol_edits", []), state.get("objective", {}),
+                                   state.get("scientific_preconditions", {}),
+                                   state.get("scientific_context", {}).get("hypotheses", []))
+        return {**state, "next_experiments": report,
+                "protocol_proposal": {**state.get("protocol_proposal", {}), "next_experiment_candidates": report},
+                "step_log": _append_step(state, "experiment_design")}
+
     def _node_optimization_audit(self, state: ProtocolOptimizingState) -> ProtocolOptimizingState:
         numeric_protocols = sum(
             1 for row in state.get("protocol_phenotype_rows", []) if row.get("has_numeric_phenotype")
@@ -435,6 +467,7 @@ class ProtocolOptimizingAgent:
         write_json(outputs["proposed_improved_protocol_json"], state.get("protocol_proposal", {}))
         write_json(outputs["evidence_and_risk_report"], state.get("risk_report", {}))
         write_json(outputs["experimental_validation_plan_json"], state.get("validation_plan", {}))
+        write_json(outputs["next_experiment_candidates"], state.get("next_experiments", {}))
         write_csv_dicts(
             outputs["factor_recommendation_table"], state.get("protocol_proposal", {}).get("recommendations", [])
         )
@@ -467,6 +500,7 @@ class ProtocolOptimizingAgent:
             "evidence_and_risk_report": self.output_dir / "evidence_and_risk_report.json",
             "experimental_validation_plan_md": self.output_dir / "experimental_validation_plan.md",
             "experimental_validation_plan_json": self.output_dir / "experimental_validation_plan.json",
+            "next_experiment_candidates": self.output_dir / "next_experiment_candidates.json",
         }
 
 
@@ -1295,17 +1329,17 @@ def _change_text(feature: str, role: str) -> str:
 
 def _render_protocol_markdown(protocol_doc: dict[str, Any]) -> str:
     lines = [
-        "# Proposed Improved Pancreatic / Islet Organoid Protocol",
+        "# Candidate Pancreatic / Islet Organoid Experiments",
         "",
         "## Policy",
         "",
-        "Associations are optimization hypotheses, not causal proof. Experimental validation is required.",
+        "Associations are hypotheses, not causal proof. Candidates require researcher review and experimental validation.",
         "",
         "## Objective",
         "",
         f"- Primary: `{protocol_doc.get('objective', {}).get('primary', 'increase_beta_like_maturity')}`",
         "",
-        "## Recommendations",
+        "## Hypothesis-Based Study Variables",
         "",
     ]
     for rec in protocol_doc.get("recommendations", []):
@@ -1321,6 +1355,15 @@ def _render_protocol_markdown(protocol_doc: dict[str, Any]) -> str:
                 "",
             ]
         )
+    experiment_report = protocol_doc.get("next_experiment_candidates", {})
+    if experiment_report:
+        lines.extend(["## Experiment Selection", "", "Candidates remain pending researcher review.", "",
+                      f"- Scientific preconditions: `{experiment_report.get('scientific_preconditions', {}).get('status', 'unknown')}`",
+                      f"- Selected for review: {', '.join(experiment_report.get('selected_for_review', [])) or 'none; resolve missing evidence and assessments'}", ""])
+        for candidate in experiment_report.get("candidates", []):
+            lines.extend([f"### {candidate['id']}", "", f"- Feature: `{candidate['intervention'].get('candidate_feature', '')}`",
+                          f"- Ordinal decision utility: `{candidate.get('utility')}`",
+                          f"- Critique: {', '.join(candidate.get('critique', [])) or 'no unresolved gate findings'}", ""])
     return "\n".join(lines)
 
 
