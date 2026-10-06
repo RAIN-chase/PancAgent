@@ -73,7 +73,9 @@ Compatibility rule:
 
 Scientific state is project-scoped across runs at `{workspace_root}/users/{user_id}/research/{project_id}/scientific_state.sqlite3`. Production services must authorize project access and bind user identity server-side. SQLite revisions and researcher lifecycle transitions are transactional; immutable evidence and version history must be retained. See [scientific_world_model.md](scientific_world_model.md) for the implemented contracts and operator workflow.
 
-Execution readiness does not establish scientific comparability. Missing cell line, stage, modality, reference or phenotype scale metadata must remain unknown. Experiment shortlist eligibility requires scientific preconditions and explicit sourced decision assessments. Chat tools cannot approve an experiment or supply wet-lab feedback. The researcher's CLI is an explicit local operator interface, not production authentication.
+Execution readiness does not establish scientific comparability. Missing cell line, stage, modality, reference, expression scale, normalization, method version, cell population or sampling conditions remain unknown and block numeric merging. Valid target endpoint counts and identified biological replicates, not directory/file counts, govern exploratory screening. Chat tools cannot approve an experiment or supply wet-lab feedback. Authenticated API/CLI researcher commands require project review permission and verified identity; local mode remains an explicit trusted operator interface.
+
+Candidate identity and evaluation identity are distinct. A proposed candidate may be reassessed with immutable history; a reviewed/executed evaluation is locked, and approval must specify its exact current evaluation ID. SQLite is the authority for candidate exports. Testable hypothesis identity includes baseline version, intervention and background, rather than just feature/goal. Experimental feedback only enters numerical PO calculations after reviewed admission binds actual compiled PA features, samples and controls. Immutable datasets/results preserve prior numerical outputs and do not imply causality.
 
 Readiness must validate output content, not just file presence.
 
@@ -91,7 +93,7 @@ Rules:
 - Researcher experiment reviews and experimental feedback invalidate cached PO experiment-design results.
 - A Data Analysis query with requested genes, groups, protocol, dataset, sample, or condition must not return unrelated cached rows.
 - If cached rows exist but do not match the structured request, return `no_matching_cached_result` unless structured inputs are provided for execution.
-- If upstream inputs are provided to the Orchestrator optimization tool, missing PA/DA outputs may be generated before PO readiness is rebuilt.
+- Only Orchestrator schedules upstream actions. The optimization tool never accepts raw PA/DA inputs or invokes upstream agents internally; absent or invalid outputs produce explicit dependency gaps.
 
 ## Orchestrator Evidence Envelope
 
@@ -99,7 +101,7 @@ Every Orchestrator-facing SubAgent response must return:
 
 ```json
 {
-  "schema_version": "orchestrator-evidence-envelope-v1",
+  "schema_version": "orchestrator-evidence-envelope-v2",
   "trace_id": "...",
   "run_id": "...",
   "user_id": "...",
@@ -110,6 +112,8 @@ Every Orchestrator-facing SubAgent response must return:
   "used_tools": [],
   "used_features": [],
   "evidence_refs": [],
+  "result_refs": [],
+  "validation": {},
   "confidence_caveats": [],
   "limitations": [],
   "provenance": [],
@@ -126,6 +130,10 @@ Interpretation:
 - `confidence_caveats`: all caveats that affect scientific interpretation.
 - `result_preview`: small answer-ready subset only; full data belongs in output files.
 - `output_files`: paths to durable outputs for downstream agents or UI previews.
+- `result_refs`: immutable result ID/path/hash/input/tool-version references attached by the scheduler after saving. Raw domain results do not contain a self-referential hash.
+- `validation`: task-scoped validity and applicability, not a global readiness flag.
+
+Envelope v2 removes duplicate `result` and PO top-level numeric aliases. Consumers read `result_preview`; final reports hold references and render values from saved JSON.
 
 LLM policy:
 
@@ -264,14 +272,14 @@ Tool-call log fields:
 - `question`
 - `output_files`
 
-Future extensions:
+Run archival extension (2026-10-01):
 
-- LLM latency
-- LLM token usage
-- LLM cost estimate
-- model name
-- tool runtime duration
-- input hash for large server files using metadata hash when full hash is too expensive
+- `RunArchive` now records actual prompts/responses, model parameters, reported token usage, model/tool latency, complete parameter files and intermediate results.
+- Costs and unreported provider model revisions remain unknown, not zero.
+- Input identity uses complete content hashes; registered, server-owned read-only dataset versions reuse their ingestion hash under an explicit immutable-storage contract. Metadata alone does not define data identity.
+- Configured output roots are no longer reusable execution directories. Existing PA/DA/PO outputs are snapshotted into fresh run directories; completed call outputs have separate artifact copies.
+- SQLite serializes journal updates, and manifests/logs are atomic views. Completed runs are sealed with `bundle_manifest.json` and reject updates.
+- See [Run Archives](run_archives.md) for the complete file contract, migration, dataset registration, verification and crash/retention limits.
 
 ## Implementation Priorities
 
@@ -280,4 +288,4 @@ Future extensions:
 3. Route multi-user runs through `RunContext`.
 4. Implement real Data Analysis h5ad operations on Linux.
 5. Add frontend renderers for evidence envelopes.
-6. Add LLM latency/cost tracking once model callbacks are centralized.
+6. Validate live streaming/provider usage reporting and apply server archive retention/backups.

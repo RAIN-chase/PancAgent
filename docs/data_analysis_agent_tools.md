@@ -19,7 +19,7 @@ Manifest rows describe logical cell subsets, not physical files. Multiple rows m
 
 `analysis_mode=standard` is the default. It uses the fixed, versioned tools below. `analysis_mode=exploratory` additionally accepts an `exploratory_analysis` bundle containing generated `script`, `environment`, `config`, `diagnostics`, and deterministic `validation_checks`. Generated code must run in an external sandbox; the Data Analysis Agent archives but does not execute arbitrary code in its main process.
 
-Every run writes `data_analysis_validation.json`. The Protocol Optimizing Agent may consume the outputs only when `validation_status` is `passed` and `po_ready` is `true`. The gate checks:
+Every run writes `data_analysis_validation.json`, separating `technical_qc`, `task_validity`, `metric_status` and `statistical_applicability`. Valid composition does not require maturity/reference calculations. Validation schema v2 removes the global `po_ready` flag. Protocol Optimizing checks technical QC plus task validity for explicit optimization endpoints (maturity by default); unrelated metric failures do not veto a valid task. Old v1 validation snapshots require rerunning DA. Task checks include:
 
 - manifest dataset identity and h5ad path;
 - actual selected cells and recorded obs filters;
@@ -27,13 +27,13 @@ Every run writes `data_analysis_validation.json`. The Protocol Optimizing Agent 
 - explicit and available `X`, layer, or `raw.X` source;
 - non-empty DE comparison groups;
 - explicit DE expression scale;
-- validated numeric maturity and reference-similarity outputs.
+- valid numeric results for the requested task only, with its method and applicability recorded.
 
 The gate is deterministic readiness validation. LLM-authored quality labels are not statistical confidence probabilities.
 
 ## Current Framework Tools
 
-The executable framework is in `backend/protocol_optimization_agent/agents/data_analysis.py`. The stable tool contracts are in `backend/protocol_optimization_agent/tools/h5ad_tools.py` and `backend/protocol_optimization_agent/tools/external_data_tools.py`.
+The executable framework is in `backend/protocol_optimization_agent/agents/data_analysis.py`. The stable tool contracts are implemented in `backend/protocol_optimization_agent/analysis/phenotype/h5ad_tools.py` and `backend/protocol_optimization_agent/analysis/phenotype/external_tools.py`; old `tools/` aliases have been removed.
 
 External tool source checkouts are stored under:
 
@@ -80,7 +80,7 @@ The local anndata-backed implementation supports:
 - Cell-type composition from a configured annotation column.
 - Target gene expression summaries by all cells or by an obs grouping column.
 - Marker/gene-program scores as mean expression over found target genes.
-- Lightweight differential expression for configured target genes between two obs groups.
+- Descriptive target-gene differences between two obs groups; explicit independent biological-repeat metadata enables exploratory Welch testing on repeat means with BH correction over the valid requested genes. Unknown design/scale, raw counts, paired units or fully confounded batches do not receive p/q values. This is not a validated counts/pseudobulk GLM or causal evidence; see [analysis contract](planned_scientific_analysis.md).
 
 Example config:
 

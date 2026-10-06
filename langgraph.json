@@ -1,8 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "protocol_chat": "./backend/protocol_optimization_agent/langgraph_server.py:graph",
-    "orchestrator": "./backend/protocol_optimization_agent/orchestrator_agent.py:graph"
+    "protocol_chat": "./backend/protocol_optimization_agent/interfaces/langgraph_server.py:graph",
+    "orchestrator": "./backend/protocol_optimization_agent/agents/orchestrator.py:graph"
   },
   "env": ".env"
 }

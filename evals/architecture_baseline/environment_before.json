@@ -1,0 +1,15 @@
+{
+  "python": "3.11.15",
+  "packages": {
+    "pytest": "8.3.4",
+    "langgraph": "1.2.8",
+    "pydantic": "2.10.3",
+    "numpy": "2.1.3",
+    "anndata": "not_installed"
+  },
+  "input_sha256": {
+    "protocols.jsonl": "2204d5faf2ce8a86b8ab7c322386231633812e4e02dda3cc7c11ec094097a277",
+    "gene_expression_summary.csv": "fd7376178724ce856bc9d174ec6c749dea46274a293b27d6325729a406b0e3a7",
+    "config.json": "5a18a29877efcb8e9a0b2ea70aeb8ec9456e0c8f353ae1d0e35d27dd537228b3"
+  }
+}

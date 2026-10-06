@@ -5,39 +5,23 @@ from pathlib import Path
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from protocol_optimization_agent.orchestrator_agent import (
-    ORCHESTRATOR_TOOLS,
-    SUBAGENT_REGISTRY,
+from protocol_optimization_agent.agents.orchestrator import (
     build_orchestrator_graph,
-    classify_route,
     data_analysis_agent,
     protocol_optimizing_agent,
 )
 
 
-def test_orchestrator_subagents_are_registered() -> None:
-    assert list(SUBAGENT_REGISTRY) == [
-        "protocol_analysis_agent",
-        "data_analysis_agent",
-        "protocol_optimizing_agent",
-    ]
-    assert [tool.name for tool in ORCHESTRATOR_TOOLS] == [
-        "describe_subagents",
-        "protocol_analysis_agent",
-        "data_analysis_agent",
-        "protocol_optimizing_agent",
-        "describe_scientific_actions",
-        "inspect_scientific_state",
-        "execute_scientific_action",
-    ]
-
-
-def test_orchestrator_route_classifier() -> None:
-    assert classify_route("Inspect scientific state") == "inspect_scientific_state"
-    assert classify_route("Use the world model to recommend next experiments") == "protocol_optimizing_agent"
-    assert classify_route("比较 protocol A 和 protocol B 的差异") == "protocol_analysis_agent"
-    assert classify_route("这个 h5ad 的 beta cell marker expression 怎么样") == "data_analysis_agent"
-    assert classify_route("基于 protocol 和 h5ad 结果推荐一个优化方案") == "protocol_optimizing_agent"
+def test_registry_is_the_only_capability_and_routing_source() -> None:
+    from protocol_optimization_agent.agents.actions import action_registry, select_action
+    assert {action["agent"] for action in action_registry()["actions"]} == {"PA", "DA", "PO", "Orchestrator"}
+    for question, action in [("Inspect scientific state", "scientific.state"),
+                             ("recommend next experiments", "experiment.propose"),
+                             ("compare Protocol A and Protocol B", "protocol.lookup"),
+                             ("INS expression", "phenotype.gene_expression"),
+                             ("DE between groups", "phenotype.differential_expression"),
+                             ("describe protocol A", "protocol.lookup")]:
+        assert select_action(question).id == action
 
 
 def test_orchestrator_graph_runs_subagent_tool(tmp_path: Path) -> None:
@@ -65,8 +49,8 @@ def test_orchestrator_graph_runs_subagent_tool(tmp_path: Path) -> None:
                 content="",
                 tool_calls=[
                     {
-                        "name": "protocol_analysis_agent",
-                        "args": {"question": "find Protocol A"},
+                        "name": "execute_scientific_action",
+                        "args": {"action_id": "protocol.lookup", "arguments": {"question": "find Protocol A"}},
                         "id": "call_protocol_agent",
                     }
                 ],
@@ -80,6 +64,8 @@ def test_orchestrator_graph_runs_subagent_tool(tmp_path: Path) -> None:
         {
             "messages": [HumanMessage(content="find Protocol A")],
             "protocol_output_dir": str(protocol_dir),
+            "data_analysis_output_dir": str(tmp_path / "missing_da"),
+            "optimization_output_dir": str(tmp_path / "missing_po"),
             "workspace_root": str(tmp_path),
             "user_id": "test_user",
             "run_id": "test_run",
@@ -109,7 +95,7 @@ def test_protocol_optimizing_tool_reports_required_upstream_reruns(tmp_path: Pat
         }
     )
 
-    assert result["schema_version"] == "orchestrator-evidence-envelope-v1"
+    assert result["schema_version"] == "orchestrator-evidence-envelope-v2"
     assert result["used_tools"] == ["build_optimization_orchestration_plan"]
     assert result["status"] == "upstream_rerun_required"
     assert result["orchestration_plan"]["required_upstream_reruns"] == [
@@ -117,6 +103,32 @@ def test_protocol_optimizing_tool_reports_required_upstream_reruns(tmp_path: Pat
         "data_analysis_agent",
     ]
     assert result["orchestration_plan"]["can_run_protocol_optimizing_agent"] is False
+    assert not {"protocol_records", "factor_events", "h5ad_manifest_rows", "h5ad_config", "force_data_rerun"}.intersection(
+        protocol_optimizing_agent.args
+    )
+
+
+def test_optimization_validation_depends_on_objective_task_not_global_readiness(tmp_path: Path) -> None:
+    from protocol_optimization_agent.analysis.optimization.readiness import build_optimization_orchestration_plan
+
+    pa, da = tmp_path / "pa", tmp_path / "da"
+    pa.mkdir()
+    da.mkdir()
+    for name in ("protocol_feature_matrix.csv", "stage_factor_matrix_or_events_summary.csv", "protocol_feature_provenance.json"):
+        (pa / name).write_text("nonempty")
+    for name in ("data_analysis_protocol_summary.csv", "h5ad_summary_by_protocol.jsonl"):
+        (da / name).write_text("nonempty")
+    (da / "data_analysis_validation.json").write_text(json.dumps({
+        "schema_version": "data-analysis-validation-v2", "validation_status": "failed",
+        "technical_qc": {"passed": True},
+        "task_validity": {"cell_type_composition": {"valid": True}, "maturity": {"valid": False}}
+    }))
+    (da / "phenotype_ir.json").write_text(json.dumps({"phenotypes": [{"metrics": [{
+        "endpoint": "beta", "value": 0.25, "context": {"source_table": "cell_type_composition"}
+    }]}]}))
+    composition = build_optimization_orchestration_plan(pa, da, objective={"comparison": {"endpoints": ["beta"]}})
+    assert composition["can_run_protocol_optimizing_agent"] is True
+    assert build_optimization_orchestration_plan(pa, da)["can_run_protocol_optimizing_agent"] is False
 
 
 def test_data_analysis_tool_dispatches_to_selected_output(tmp_path: Path) -> None:
@@ -165,7 +177,7 @@ def test_data_analysis_tool_dispatches_to_selected_output(tmp_path: Path) -> Non
         }
     )
 
-    assert result["schema_version"] == "orchestrator-evidence-envelope-v1"
+    assert result["schema_version"] == "orchestrator-evidence-envelope-v2"
     assert result["selected_operation"] == "differential_expression"
     assert result["used_tools"] == ["differential_expression"]
     assert result["used_features"] == ["INS"]
@@ -225,9 +237,10 @@ def test_protocol_optimizing_cache_key_depends_on_objective(tmp_path: Path) -> N
         data_dir / "h5ad_summary_by_protocol.jsonl": json.dumps({"protocol_id": "p1"}) + "\n",
         data_dir / "data_analysis_validation.json": json.dumps(
             {
-                "schema_version": "data-analysis-validation-v1",
+                "schema_version": "data-analysis-validation-v2",
                 "validation_status": "passed",
-                "po_ready": True,
+                "technical_qc": {"passed": True},
+                "task_validity": {"maturity": {"valid": True}},
             }
         ),
     }.items():
@@ -285,9 +298,10 @@ def test_protocol_optimizing_tool_rejects_failed_data_validation(tmp_path: Path)
     (data_dir / "data_analysis_validation.json").write_text(
         json.dumps(
             {
-                "schema_version": "data-analysis-validation-v1",
+                "schema_version": "data-analysis-validation-v2",
                 "validation_status": "failed",
-                "po_ready": False,
+                "technical_qc": {"passed": False},
+                "task_validity": {"maturity": {"valid": False}},
             }
         ),
         encoding="utf-8",

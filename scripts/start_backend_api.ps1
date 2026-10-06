@@ -15,4 +15,4 @@ if (-not (Test-Path -LiteralPath $pythonExe)) {
   throw "Cannot find python.exe at $pythonExe. Pass -CondaEnvPath for protocol_agent."
 }
 
-& $pythonExe -m uvicorn protocol_optimization_agent.api:create_app --factory --host $HostAddress --port $Port
+& $pythonExe -m uvicorn protocol_optimization_agent.interfaces.api:create_app --factory --host $HostAddress --port $Port

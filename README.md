@@ -2,14 +2,17 @@
 
 ProtocolOptimizationAgent is a downstream multi-agent framework for improving pancreatic / islet organoid differentiation protocols by integrating:
 
-- structured protocol artifacts produced by Agent1
-- protocol factor events and evidence quality flags
+- the formal `protocols.jsonl` export produced by Agent1 (stages, reagents, evidence and quality flags)
 - per-protocol h5ad single-cell analysis results
 - maturity, similarity, marker, composition, QC, and trajectory summaries
 
 The framework is intentionally small: three domain agents plus one lightweight orchestrator, sharing a versioned Scientific World Model.
 
+The primary `orchestrator` graph now follows a validated plan, task-specific evidence checks, bounded revision and deterministic report synthesis. Plans, step results, stopping reasons and saved numeric bindings are visible in the existing chat UI. See [planned scientific analysis](docs/planned_scientific_analysis.md) for contracts, statistical boundaries and regression commands.
+
 Scientific state, Phenotype IR, registered actions, next-experiment selection and researcher feedback commands are documented in [docs/scientific_world_model.md](docs/scientific_world_model.md). PA's future `Protocol_extraction` workflow integration and final intervention IR design are deferred.
+
+Candidate approvals bind evaluation versions; reviewed feedback can enter immutable quantitative datasets. Multi-user identity, project permissions and artifact access require the [authenticated deployment profile](docs/authenticated_deployment.md); the default local profile is not a multi-user security boundary.
 
 Mandatory commit rules are documented in [CONTRIBUTING.md](E:/workspace/Pancreas/Agents_test/CONTRIBUTING.md). Every commit must check code correctness and comment quality before staging.
 
@@ -18,14 +21,21 @@ Mandatory commit rules are documented in [CONTRIBUTING.md](E:/workspace/Pancreas
 ```text
 backend/
   protocol_optimization_agent/
-    api.py                  # Backend HTTP API boundary for the UI
-    agents/                 # Domain agents
-    workflow.py             # Overall LangGraph workflow skeleton
-    ...
+    agents/                 # Conversation, domain agents, fixed batch pipeline
+      orchestrator.py       # Main conversational graph: orchestrator
+      pipeline.py           # Fixed PA -> DA -> PO batch execution
+    analysis/               # Deterministic protocol, phenotype, optimization calculations
+    science/                # Scientific identities, records, datasets and history
+    runtime/                # Context, authorization, archives, models, configuration and IO
+    interfaces/             # HTTP API, LangGraph Server, authentication adapters and CLI
+      langgraph_server.py   # PA-only conversation: protocol_chat
+    extensions/experimental_feedback/ # Explicit review, execution and feedback lifecycle
+    schemas.py              # Analysis input/output contracts
+    state.py                # Batch execution state
   tests/
 
 frontend/
-  index.html                # Static UI shell
+  src/                      # Next.js agent-chat-ui
   README.md
 
 configs/
@@ -63,15 +73,27 @@ Core agents:
 
 Optimization orchestration is explicit: `ProtocolOptimizingAgent` consumes audited Protocol/Data Agent outputs. If protocol or data inputs need reinterpretation, rerun the corresponding upstream agent first; the Orchestrator reports `upstream_rerun_required` instead of optimizing from incomplete PA/DA outputs.
 
-## LangGraph Workflow
+## Execution Entrypoints
 
-The overall workflow skeleton lives in `protocol_optimization_agent.workflow`.
-`ProtocolAnalysisAgent.run()` already executes its own internal LangGraph `StateGraph`.
+| Entry | Purpose | Implementation |
+| --- | --- | --- |
+| `orchestrator` | Main conversation and SubAgent dispatch | `agents/orchestrator.py:graph` |
+| `protocol_chat` | Optional PA-only protocol queries | `interfaces/langgraph_server.py:graph` |
+| `protocol-optimization-agent --config configs/run_config.json` | Reproducible PA -> DA -> PO batch | `agents/pipeline.py` through `interfaces/cli.py` |
+
+Each domain agent executes its own internal LangGraph `StateGraph`. The unused
+no-op `workflow.py` skeleton has been removed; it was not an executable analysis.
+
+Architecture simplification is recorded in [steps 1-3](docs/architecture_simplification_steps_1_3.md)
+and [steps 4-8](docs/architecture_simplification_steps_4_8.md), alongside a frozen scientific baseline.
+Legacy module paths forward to the same implementations; removal requires a documented
+breaking release after downstream callers migrate. Internal code uses the new paths.
 
 ```python
-from protocol_optimization_agent.workflow import build_langgraph_workflow
+from protocol_optimization_agent.agents.pipeline import ProtocolOptimizationAgent
+from protocol_optimization_agent.runtime.config import ProtocolOptimizationConfig
 
-workflow = build_langgraph_workflow()
+state = ProtocolOptimizationAgent(ProtocolOptimizationConfig.from_file("configs/run_config.json")).run()
 ```
 
 Run the backend API:
@@ -87,7 +109,8 @@ The LangGraph Server entrypoint for `agent-chat-ui` is defined in the root `lang
 ```json
 {
   "graphs": {
-    "protocol_chat": "./backend/protocol_optimization_agent/langgraph_server.py:graph"
+    "orchestrator": "./backend/protocol_optimization_agent/agents/orchestrator.py:graph",
+    "protocol_chat": "./backend/protocol_optimization_agent/interfaces/langgraph_server.py:graph"
   }
 }
 ```
@@ -110,7 +133,9 @@ cd E:\workspace\Pancreas\Agents_test
 .\scripts\start_langgraph_server.ps1 -HostAddress 0.0.0.0 -Port 2024 -OutputDir "runs\protocol_analysis_agent_simplified_autofeatures"
 ```
 
-Then connect `agent-chat-ui` to the LangGraph server and select the `protocol_chat` graph. The graph accepts standard chat `messages` and streams LLM/tool/answer updates.
+Then connect `agent-chat-ui` to the LangGraph server and select `orchestrator` for
+normal use, or `protocol_chat` for PA-only queries. Both accept standard chat
+`messages` and stream LLM/tool/answer updates.
 
 For LAN access, do not use `0.0.0.0` in the browser or frontend env. Use the machine LAN IP, for example:
 
@@ -132,8 +157,8 @@ For all commands above, the backend scripts call the `protocol_agent` environmen
 
 ## Agent Subgraph Diagram
 
-The first-pass multi-agent subgraph design is stored in `docs/agent_subgraphs.md`
-and generated from `protocol_optimization_agent.subgraphs`.
+The subgraph diagram is generated from the executable agent graphs by
+`protocol_optimization_agent.subgraphs`, with human-readable scientific annotations.
 
 The current project architecture, implemented technical details, completed work, and planned orchestrator direction are documented in [docs/current_project_architecture.md](E:/workspace/Pancreas/Agents_test/docs/current_project_architecture.md).
 
@@ -141,7 +166,7 @@ In IPython or Jupyter:
 
 ```python
 from protocol_optimization_agent.subgraphs import render_core_agent_subgraphs_mermaid
-from protocol_optimization_agent.visualization.mermaid import display_mermaid
+from protocol_optimization_agent.analysis.visualization.mermaid import display_mermaid
 
 display_mermaid(render_core_agent_subgraphs_mermaid())
 ```
@@ -166,7 +191,7 @@ Edit `configs/run_config.json`, then run:
 protocol-optimization-agent --config configs/run_config.json
 ```
 
-Outputs are written to the configured `output_dir`, with one subdirectory per agent plus a pipeline run log.
+The configured `output_dir` is a storage root, not a reusable result directory. Each pipeline/agent execution creates a unique run directory and prints or returns its actual output paths. Conversation graphs snapshot their configured PA/DA/PO source directories into the new run rather than modifying historical results. See [Run Archives](docs/run_archives.md) for input registration, manifests, verification, and migration details.
 
 Run the Protocol Analysis Agent alone against the minimal Agent1 protocol inputs:
 
@@ -192,12 +217,11 @@ protocol_input_quality_gate
 -> export_results
 ```
 
-The loader accepts either:
-
-- `protocol_artifacts.jsonl` plus `protocol_factor_events.csv`
-- or `protocol_database.sqlite` plus `protocol_factor_events.csv`
-
-When `protocol_artifacts.jsonl` is absent, protocol records are reconstructed from SQLite and `comparison_ready` is inferred from evidence coverage, confidence, stage/reagent availability, and severe validation flags.
+The only formal protocol input is `inputs/Protocols inputs/protocols.jsonl`.
+The loader projects its structured stages/preparation/reagents into internal factor events and source identity rows.
+It does not read sidecar CSVs or reconstruct protocols from SQLite. Missing, empty or invalid formal input fails explicitly.
+Readiness and unknown numerical values are preserved; being a formal export does not imply scientific comparison readiness.
+See [docs/protocol_input_contract.md](docs/protocol_input_contract.md) for the contract and migration details.
 
 Protocol Analysis Agent outputs:
 
@@ -312,13 +336,9 @@ Feature discovery governance:
 
 ## Expected Inputs
 
-Agent1 artifacts:
+Formal Agent1 protocol export:
 
-- `protocol_artifacts.jsonl`
-- `protocol_factor_events.csv`
-- `protocol_database.sqlite`
-- `lineage_candidate_edges.csv`
-- `protocol_evidence_coverage.csv`
+- `inputs/Protocols inputs/protocols.jsonl` (the only protocol source)
 
 H5AD manifest:
 
@@ -342,3 +362,9 @@ Recommendations are explicitly labeled as:
 - `requires_experimental_validation`
 
 Correlation is not reported as causality unless an external literature or experimental evidence layer is later added.
+
+### Execution Simplification (2026-10-06)
+
+The primary graph is `configure -> plan -> execute -> review -> execute or finalize`. Only Orchestrator owns planning and bounded iteration; PA/DA/PO execute domain tasks. Action Registry is the sole capability list. Loop state is `request`, `plan`, `step_results`, `budget`, `stop_reason`; saved JSON is the numeric authority. DA validation v2 uses per-task checks instead of `po_ready`.
+
+Legacy Python forwarding modules and `runtime` symbol re-exports have been removed. Use canonical paths such as `protocol_optimization_agent.agents.orchestrator`, `agents.pipeline`, `runtime.context`, and `interfaces.cli`. CLI command names, API routes and graph IDs remain unchanged. Regenerate legacy DA validation snapshots before optimization. See [execution and migration details](docs/planned_scientific_analysis.md).

@@ -3,12 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
-from protocol_optimization_agent.scientific_reasoning import (
-    build_phenotype_ir,
-    design_experiments,
-    interpret_phenotypes,
-    scientific_preconditions,
-)
+from protocol_optimization_agent.analysis.optimization.comparability import scientific_preconditions
+from protocol_optimization_agent.analysis.optimization.experiment_design import design_experiments
+from protocol_optimization_agent.analysis.phenotype.representation import build_phenotype_ir, interpret_phenotypes
 
 
 def _ir() -> dict:
@@ -85,9 +82,19 @@ def test_interpretation_is_independent_and_conflicts_require_review() -> None:
 
 
 def test_scientific_comparability_distinguishes_unknown_and_mismatch() -> None:
-    metadata = {"cell_line": "line1", "stage": "S6", "sequencing_modality": "scRNA", "reference_version": "atlas-v1"}
+    metadata = {"cell_line": "line1", "stage": "S6", "sequencing_modality": "scRNA", "reference_version": "atlas-v1",
+                "expression_scale": "score_0_1", "normalization": "fixed_v1", "method_version": "v1",
+                "cell_population": "beta", "sampling_condition": "day30"}
     protocols = [{"protocol_id": f"p{i}", **metadata} for i in range(5)]
-    phenotypes = [{**_ir()["phenotypes"][0], "protocol_id": f"p{i}", "metadata": metadata} for i in range(5)]
+    phenotypes = []
+    for i in range(5):
+        for repeat in range(2):
+            p = deepcopy(_ir()["phenotypes"][0])
+            p.update(protocol_id=f"p{i}", sample_id=f"p{i}_sample{repeat}", metadata={**metadata, "biological_replicate_id": f"r{repeat}"})
+            p["id"] = f"p{i}_phenotype{repeat}"
+            p["metrics"][0]["id"] = f"p{i}_metric{repeat}"
+            p["metrics"][0]["unit"] = "score_0_1"
+            phenotypes.append(p)
     assert scientific_preconditions(protocols, phenotypes)["scientific_ready"] is True
     protocols[0].pop("cell_line")
     report = scientific_preconditions(protocols, phenotypes)
@@ -100,7 +107,10 @@ def test_scientific_comparability_distinguishes_unknown_and_mismatch() -> None:
 
 def test_experiment_selection_uses_explicit_information_value_and_prior_tests() -> None:
     edits = [
-        {"candidate_feature": f"factor_{letter}", "evidence_refs": [{"protocol_id": "p1"}], "rationale": "test"}
+        {"candidate_feature": f"factor_{letter}", "evidence_refs": [{"protocol_id": "p1"}], "rationale": "test",
+         "baseline_protocol_id": "p1", "baseline_protocol_version": "v1", "target_stage": "S6", "day_start": 20, "day_end": 30,
+         "edit_type": "increase", "operation": "increase", "reagent_or_operation": letter,
+         "dose_or_condition_range": {"value": 10, "unit": "ng/ml"}, "applicable_context": {"cell_line": "line1"}}
         for letter in ("a", "b")
     ]
     objective = {

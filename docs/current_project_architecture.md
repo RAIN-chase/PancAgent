@@ -29,27 +29,25 @@ Evidence-grounded hypotheses and next experiment candidates
 backend/
   protocol_optimization_agent/
     agents/
+      orchestrator.py             # Main conversational graph and SubAgent dispatch
+      actions.py                  # Versioned biomedical action registry
+      protocol_chat.py            # PA conversational agent
       protocol_analysis.py        # Implemented Protocol Analysis Agent
       data_analysis.py            # Data Analysis Agent framework and h5ad-compatible output contracts
       protocol_optimizing.py      # Protocol Optimizing Agent framework and optimization output contracts
-    orchestrator_agent.py         # External Orchestrator Agent graph and SubAgent routing tools
-    optimization_orchestration.py # PA/DA output readiness and rerun planning for optimization
-    scientific_models.py         # Protocol/Phenotype/Evidence/Hypothesis/Experiment contracts
-    scientific_state.py          # User/project-scoped SQLite scientific state and version history
-    scientific_reasoning.py      # Phenotype IR, interpretation consensus, scientific gates, experiment selection
-    scientific_ingestion.py      # Existing PA/DA/PO artifact adapters
-    action_space.py              # Versioned biomedical action registry
-    scientific_state_cli.py      # Explicit researcher review and experimental feedback commands
-    api.py                        # FastAPI backend API boundary
-    langgraph_server.py           # LangGraph server chat graph for agent-chat-ui
-    query_engine.py               # Deterministic protocol query and visualization tools
-    input_loader.py               # Agent1 artifact loader
-    feature_discovery.py          # FeatureSpec discovery/audit/compiler
+      pipeline.py                 # Executable fixed PA -> DA -> PO batch pipeline
+    analysis/
+      protocol/                  # Loading, graphs, deterministic compilation, validation and queries
+      phenotype/                 # h5ad calculations, external tools, Phenotype IR and interpretation
+      optimization/              # Associations, assessment, comparability, experiment design and proposals
+      visualization/             # Mermaid rendering
+    science/                     # Models, stable IDs, SQLite history, ingestion and versioned datasets
+    runtime/                     # Context, archives, authorization, model calls, config, IO and paths
+    interfaces/                  # HTTP API, LangGraph Server, auth adapter and unchanged CLI commands
+    extensions/experimental_feedback/ # Explicit approval, execution records, feedback and admission
+    orchestrator.py               # Legacy batch class import only; no separate implementation
     schemas.py                    # Pydantic schemas
-    normalization.py              # Factor/event normalization
-    semantic_annotation.py        # Stage strategy annotation
-    audit.py                      # Evidence and consistency audit
-    subgraphs.py                  # Agent subgraph metadata and Mermaid rendering
+    subgraphs.py                  # Executable graph topology plus scientific labels and Mermaid rendering
   tests/
 
 frontend/
@@ -70,6 +68,19 @@ runs/
 docs/
   architecture_governance.md      # Runtime isolation, evidence envelope, deployment, and observability rules
 ```
+
+## Execution Entrypoints
+
+- `orchestrator`: primary conversational graph in `agents/orchestrator.py`.
+- `protocol_chat`: optional PA-only conversational graph in `interfaces/langgraph_server.py`.
+- `protocol-optimization-agent --config <config.json>`: deterministic batch execution in `agents/pipeline.py`, through the unchanged CLI command.
+- The unused no-op `workflow.py` and uncalled `tools/scoring.py` adapters have been removed. Actual maturity/reference computation status is unchanged.
+- PA reports and deterministic queries share feature group rules. `ordered_reagent_program` now belongs to `workflow` in both; numerical values, units and evidence are unchanged.
+- Subgraph topology comes from real uncompiled StateGraphs; it is not a separately maintained execution plan.
+
+Architecture simplification steps 1-8 are documented in [steps 1-3](architecture_simplification_steps_1_3.md) and [steps 4-8](architecture_simplification_steps_4_8.md), with a frozen offline regression baseline. Legacy import aliases were removed after caller migration; only canonical implementations in the layers above remain. Protocol extraction integration and final intervention IR remain deferred.
+
+Analysis modules do not import agents, server interfaces, the SQLite store or experimental extensions. Agents call calculations and update execution state; interfaces adapt authentication and transport. Runtime paths are centralized, and source archives/fingerprints track the actual implementations rather than forwarding files. The core store lazily delegates explicit experiment lifecycle operations to the optional extension; shared persisted feedback schemas remain in `science/models.py` for compatibility.
 
 ## Runtime Boundary
 
@@ -94,7 +105,7 @@ Current frontend:
 Current backend:
 
 - Provides local FastAPI endpoints for direct API operations.
-- Provides LangGraph Server graph `protocol_chat`.
+- Provides LangGraph Server graphs `orchestrator` (primary) and `protocol_chat` (PA-only).
 - Uses deterministic tools for protocol retrieval, comparison, matrix querying, provenance lookup, and heatmap generation.
 
 Current LangGraph graphs:
@@ -108,7 +119,8 @@ Current LangGraph graphs:
 Runtime governance:
 
 - `docs/architecture_governance.md` defines the source/data/runtime boundary, multi-user isolation, evidence envelope, deployment configuration, and observability requirements.
-- New Orchestrator-facing SubAgent tools should return `orchestrator-evidence-envelope-v1`.
+- `docs/run_archives.md` defines per-execution snapshots, exact configuration/tool/model records, immutable data registration, historical verification, and migration from fixed output directories.
+- New Orchestrator-facing SubAgent tools should return `orchestrator-evidence-envelope-v2`.
 - Server-side runs should pass `user_id`, `run_id`, `trace_id`, and `workspace_root` through Orchestrator state.
 - Default scoped runtime layout is `runs/users/<user_id>/runs/<run_id>/<agent_id>/` unless an explicit output directory is provided for backward compatibility.
 - Explicit Orchestrator output paths must resolve under the authorized runtime workspace unless `PROTOCOL_ALLOW_EXTERNAL_OUTPUT_DIR=1` is set for local development.
@@ -124,13 +136,16 @@ The implemented scientific state upgrade is documented in [scientific_world_mode
 - Execution readiness and scientific preconditions are separate. Unknown or mismatched cell line/stage/modality/reference metadata restrict inference and experiment eligibility.
 - Orchestrator exposes `describe_scientific_actions`, `execute_scientific_action` and `inspect_scientific_state`. Registered unavailable actions are not executed.
 - Explicit researcher CLI commands control experiment approval, completion and QC-passed phenotype feedback. Hypotheses become `SUPPORTED`, `REFUTED` or `UNRESOLVED`, retaining contradictory evidence and full revision history.
-- Experimental feedback contributes to the PO cache fingerprint and future proposal generation.
+- Candidate evaluations are versioned independently of identity; approvals bind an exact evaluation and persisted SQLite records govern exported reports.
+- Hypotheses distinguish concrete baseline, intervention, context and endpoint specifications within a broader research topic; conclusions never transfer merely because the feature name matches.
+- Reviewed feedback admission binds actual PA protocol snapshots, treatment samples and controls. PO uses admitted numeric phenotypes in immutable analysis datasets and preserves quantitative results/changes across runs.
+- Authenticated deployment checks server identity, project permissions, artifact access and reviewer identity across both graphs/API/CLI. Local mode remains explicitly trusted; see [authenticated_deployment.md](authenticated_deployment.md).
 - **Deferred by project owner:** PA's unstructured-protocol to standardized intervention representation, final Protocol IR design and invocation of the external `Protocol_extraction` workflow. Existing structured protocol artifact processing remains unchanged.
 - This upgrade implements the feedback and experiment-selection framework; it does not supply missing DA maturity/reference computations, a causal model, calibrated information gain or automatic wet-lab execution.
 
-## Recommended Orchestrator Design
+## Planned Orchestrator Execution
 
-The long-term chat entrypoint should be an external Orchestrator Agent rather than a single domain agent.
+The implemented primary chat entrypoint is `orchestrator`, not a single domain agent. Its graph is `configure -> plan -> execute -> review -> execute or finalize (report + archive)`. Code validates Action availability, arguments, dependency ordering, expected results, task validity, repeat evidence and budgets. Partial results are sealed on normal stops and model failures. Saved JSON drives report numbers and the existing UI's plan/progress/stop display. See [planned scientific analysis](planned_scientific_analysis.md) for current limits and examples.
 
 ```mermaid
 flowchart TD
@@ -164,22 +179,20 @@ The Protocol Analysis Agent is the first implemented domain agent. It consumes A
 
 ### Inputs
 
-Minimum intended inputs:
+Formal protocol input:
 
 ```text
 inputs/Protocols inputs/
-  protocol_factor_events.csv
-  protocol_database.sqlite
-  source_identity_inventory.csv
-  protocol_artifacts.jsonl        # Optional when SQLite is available
+  protocols.jsonl                # Only formal protocol source
 ```
 
 Current loader behavior:
 
-- Uses `protocol_artifacts.jsonl` when available.
-- Reconstructs protocol records from `protocol_database.sqlite` when JSONL artifacts are absent.
-- Uses `protocol_factor_events.csv` as event-level structured input.
-- Uses source identity inventory data when available to validate source/paper mapping.
+- Requires `protocols.jsonl`; no CSV/SQLite fallback is permitted.
+- Projects flat protocol metadata, structured stages/preparation and nested reagents into the existing PA records/events contract.
+- Derives paper/source identity only from the same JSONL records and preserves source record indexes/JSON pointers on events.
+- Preserves supplied readiness, evidence and unknown values; missing readiness is false. No LLM or evidence-quote parsing fills missing numbers.
+- See [protocol_input_contract.md](protocol_input_contract.md). h5ad manifests remain a separate DA input, not protocol authority.
 
 Quality gates:
 
@@ -449,13 +462,13 @@ Execution paths:
 - `standard` (default): fixed tools and declared expression/sample/group contracts.
 - `exploratory`: keeps the standard baseline and archives sandbox-generated code, environment, configuration, diagnostics, and deterministic validation checks. The Data Analysis Agent does not execute arbitrary generated code in its main process.
 
-Both paths end at `data_analysis_validation.json`. Protocol Optimizing Agent readiness requires this report to contain `validation_status=passed` and `po_ready=true`; file existence or an LLM quality score alone is insufficient. The gate checks manifest identity, actual selected cells, requested genes, expression source, DE groups, expression scale, maturity output, and reference-similarity output. An LLM assessment is qualitative commentary, not a statistical confidence probability.
+Both paths end at `data_analysis_validation.json`. Technical QC, per-task metric validity and statistical applicability are separate. Composition and gene-expression tasks do not require maturity/reference scores. Independent-biological-replicate mean comparisons with BH correction remain exploratory; missing design metadata, paired/overlapping units, fully confounded batches or raw counts yield descriptive results only. The optimization gate checks technical QC and task validation for the requested objective endpoints, not a global `po_ready` flag. Unknown or missing endpoint evidence blocks optimization; unrelated failed metrics do not invalidate a usable task. Validation v1 snapshots must be regenerated as v2; file existence or an LLM quality score alone is insufficient. An LLM assessment is qualitative commentary, not a statistical confidence probability.
 
 Implementation:
 
 ```text
 backend/protocol_optimization_agent/agents/data_analysis.py
-backend/protocol_optimization_agent/tools/h5ad_tools.py
+backend/protocol_optimization_agent/analysis/phenotype/h5ad_tools.py
 docs/data_analysis_agent_tools.md
 ```
 
@@ -589,7 +602,7 @@ Current optimization behavior:
 - Assigns each phenotype endpoint a `direction`, `weight`, `confidence`, and objective-aware score so positive maturity/readiness metrics and negative stress/off-target metrics are not averaged in the wrong direction.
 - Joins protocol features to phenotype summaries by `protocol_id`.
 - Carries confounder markers such as dataset, paper, cell line, assay, timepoint, batch, condition, and sample when those fields are available.
-- Runs a conservative Pearson correlation screen against the objective-weighted phenotype score only when at least five numeric protocol-phenotype pairs are available.
+- Runs an exploratory Pearson screen only on explicit, scale-compatible endpoint cohorts with actual valid samples and identified biological replicates. The configurable protocol floor is at least three, not a claim of statistical sufficiency; unresolved scientific gates prevent numeric pooling.
 - Falls back to biologically prioritized protocol-feature review when numeric phenotype outputs are pending.
 - Ranks candidate features with mechanism labels such as maturity/beta identity, developmental pathway, microenvironment, and workflow sequence axes.
 - Converts ranked candidates into stage-level protocol edits with target stage/day, reagent or operation, dose or condition range, evidence refs, negative controls, and validation readouts.

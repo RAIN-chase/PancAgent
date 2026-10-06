@@ -8,6 +8,7 @@ dependencies = [
   "langchain-core>=0.3",
   "langchain-openai>=0.3",
   "langgraph>=0.2",
+  "langgraph-sdk>=0.4.2",
   "pydantic>=2.0",
   "uvicorn>=0.27",
 ]
@@ -17,6 +18,7 @@ h5ad = [
   "anndata>=0.10",
   "scanpy>=1.10",
   "pandas>=2.0",
+  "scipy>=1.11",
 ]
 data-analysis-tools = [
   "anndata>=0.10",
@@ -27,6 +29,7 @@ data-analysis-tools = [
   "pandas>=2.0",
   "pyscenic>=0.12",
   "scanpy>=1.10",
+  "scipy>=1.11",
   "scib-metrics>=0.5",
   "scvelo>=0.3",
   "scvi-tools>=1.0",
@@ -40,11 +43,12 @@ dev = [
 ]
 
 [project.scripts]
-protocol-optimization-agent = "protocol_optimization_agent.cli:main"
-protocol-analysis-agent = "protocol_optimization_agent.protocol_analysis_cli:main"
-protocol-query = "protocol_optimization_agent.protocol_query_cli:main"
-protocol-api = "protocol_optimization_agent.api:main"
-scientific-state = "protocol_optimization_agent.scientific_state_cli:main"
+protocol-optimization-agent = "protocol_optimization_agent.interfaces.cli:main"
+protocol-analysis-agent = "protocol_optimization_agent.interfaces.protocol_analysis_cli:main"
+protocol-query = "protocol_optimization_agent.interfaces.protocol_query_cli:main"
+protocol-api = "protocol_optimization_agent.interfaces.api:main"
+scientific-state = "protocol_optimization_agent.interfaces.scientific_state_cli:main"
+run-archive = "protocol_optimization_agent.interfaces.run_archive_cli:main"
 
 [tool.setuptools.package-dir]
 "" = "backend"
@@ -70,5 +74,5 @@ pretty = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["anndata", "fastapi", "scipy", "uvicorn"]
+module = ["anndata", "fastapi", "scipy", "scipy.*", "uvicorn"]
 ignore_missing_imports = true

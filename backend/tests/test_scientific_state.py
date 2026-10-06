@@ -4,8 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from protocol_optimization_agent.runtime import RunContext
-from protocol_optimization_agent.scientific_models import (
+from protocol_optimization_agent.runtime.context import RunContext
+from protocol_optimization_agent.science.models import (
     DecisionAssessment,
     Evidence,
     ExperimentCandidate,
@@ -14,7 +14,7 @@ from protocol_optimization_agent.scientific_models import (
     PhenotypeMetric,
     PhenotypeState,
 )
-from protocol_optimization_agent.scientific_state import ScientificWorldModel
+from protocol_optimization_agent.science.state import ScientificWorldModel
 from pydantic import ValidationError
 
 
@@ -88,7 +88,8 @@ def test_closed_loop_preserves_conflicting_evidence_and_history(tmp_path: Path) 
     )
     for candidate_id, outcome in (("exp1", "supports"), ("exp2", "refutes")):
         store.put([_candidate(candidate_id)], "S5")
-        store.review(candidate_id, True, "Alice", "Matched design and cost checked")
+        store.review(candidate_id, True, "Alice", "Matched design and cost checked",
+                     evaluation_id=store.get("experiment", candidate_id)["evaluation_id"])
         store.mark_performed(candidate_id, "Alice")
         feedback = _feedback(candidate_id, outcome)
         store.record_feedback(feedback)
@@ -119,14 +120,14 @@ def test_review_execution_and_feedback_gates_are_enforced(tmp_path: Path) -> Non
         store.record_feedback(_feedback("exp1", "supports"))
     store.put([ExperimentCandidate(id="blocked", hypothesis_ids=["h1"], intervention={})], "S5")
     with pytest.raises(ValueError, match="preconditions"):
-        store.review("blocked", True, "Alice", "review")
+        store.review("blocked", True, "Alice", "review", evaluation_id=store.get("experiment", "blocked")["evaluation_id"])
     with pytest.raises(ValueError, match="lifecycle"):
         store.put([_candidate("forged").model_copy(update={"status": "APPROVED"})], "S5")
     with pytest.raises(ValueError, match="Belief"):
         store.put([hypothesis.model_copy(update={"status": "SUPPORTED"})], "S4")
     with pytest.raises(ValidationError, match="experiment"):
         ExperimentFeedback.model_validate({**_feedback("exp1", "supports").model_dump(), "experiment_id": "other"})
-    store.review("exp1", True, "Alice", "review")
+    store.review("exp1", True, "Alice", "review", evaluation_id=store.get("experiment", "exp1")["evaluation_id"])
     store.mark_performed("exp1", "Alice")
     feedback = _feedback("exp1", "supports")
     feedback.phenotypes[0].validation_status = "failed"

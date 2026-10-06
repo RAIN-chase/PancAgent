@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
-from protocol_optimization_agent.tools.external_data_tools import get_external_data_analysis_tools
-from protocol_optimization_agent.tools.h5ad_tools import (
+from protocol_optimization_agent.analysis.phenotype.external_tools import get_external_data_analysis_tools
+from protocol_optimization_agent.analysis.phenotype.h5ad_tools import (
     compute_differential_expression,
     query_gene_expression,
     validate_data_analysis_inputs,
@@ -104,7 +104,7 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
     ]
 
     validation = json.loads(outputs["data_analysis_validation"].read_text(encoding="utf-8"))
-    assert validation["po_ready"] is False
+    assert validation["task_validity"]["maturity"]["valid"] is False
     assert validation["quality_interpretation"].endswith("not a statistical confidence probability.")
 
     external_rows = list(csv.DictReader(outputs["external_tool_inventory"].open(encoding="utf-8")))
@@ -187,7 +187,7 @@ def test_data_analysis_agent_runs_small_h5ad_analysis(tmp_path: Path) -> None:
     checks = {row["check_id"]: row for row in validation["checks"]}
     assert checks["cell_selection"]["passed"] is True
     assert checks["expression_scale"]["passed"] is True
-    assert validation["po_ready"] is False
+    assert validation["task_validity"]["maturity"]["valid"] is False
 
 
 def test_same_h5ad_can_define_multiple_manifest_datasets(tmp_path: Path) -> None:
@@ -237,7 +237,7 @@ def test_exploratory_mode_archives_reproducibility_bundle(tmp_path: Path) -> Non
     validation = json.loads(outputs["data_analysis_validation"].read_text(encoding="utf-8"))
     checks = {row["check_id"]: row for row in validation["checks"]}
     assert checks["exploratory_artifacts"]["passed"] is True
-    assert validation["po_ready"] is False
+    assert validation["task_validity"]["maturity"]["valid"] is False
 
 
 def test_manifest_gate_rejects_duplicate_cell_selection(tmp_path: Path) -> None:

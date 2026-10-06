@@ -1,12 +1,8 @@
 {
-  "input_dir": "data/input",
+  "input_dir": "inputs/Protocols inputs",
   "output_dir": "runs/protocol_optimization_agent_run",
   "required_inputs": {
-    "protocol_artifacts_jsonl": "protocol_artifacts.jsonl",
-    "protocol_factor_events_csv": "protocol_factor_events.csv",
-    "protocol_database_sqlite": "protocol_database.sqlite",
-    "lineage_candidate_edges_csv": "lineage_candidate_edges.csv",
-    "protocol_evidence_coverage_csv": "protocol_evidence_coverage.csv",
+    "protocols_jsonl": "protocols.jsonl",
     "protocol_h5ad_manifest_csv": "protocol_h5ad_manifest.csv"
   },
   "quality_filters": {

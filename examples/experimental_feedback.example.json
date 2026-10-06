@@ -7,7 +7,11 @@
     "run_id": "REPLACE_ANALYSIS_RUN_ID",
     "trace_id": "REPLACE_ANALYSIS_TRACE_ID",
     "quality": "passed",
-    "observations": {"experiment_id": "REPLACE_EXPERIMENT_ID"}
+    "observations": {
+      "experiment_id": "REPLACE_EXPERIMENT_ID",
+      "evaluation_id": "REPLACE_APPROVED_EVALUATION_ID",
+      "test_specs": {"REPLACE_HYPOTHESIS_ID": {"status": "REPLACE_WITH_EXACT_PERSISTED_TEST_SPEC"}}
+    }
   },
   "outcomes": {"REPLACE_HYPOTHESIS_ID": "inconclusive"},
   "interpretation": "Replace with the researcher's interpretation of the controlled experimental results.",

@@ -25,8 +25,46 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { getApiKey } from "@/lib/api-key";
 import { useThreads } from "./Thread";
 import { toast } from "sonner";
+import { authHeaders } from "./client";
 
-export type StateType = { messages: Message[]; ui?: UIMessage[] };
+export type StateType = {
+  messages: Message[];
+  ui?: UIMessage[];
+  plan?: {
+    question: string;
+    target_metrics?: string[];
+    evidence_gaps?: string[];
+    steps: {
+      id: string;
+      action_id: string;
+      depends_on: string[];
+      expected_outputs: string[];
+    }[];
+  };
+  step_results?: {
+    step_id: string;
+    status: string;
+    usable: boolean;
+    executed: boolean;
+  }[];
+  stop_reason?: string;
+  budget?: {
+    max_tool_calls: number;
+    elapsed_seconds?: number;
+  };
+};
+
+export type AnalysisReport = {
+  schema_version: string;
+  run_id: string;
+  trace_id: string;
+  quantitative_bindings: {
+    result_id: string;
+    field_path: string;
+    input_version: string;
+  }[];
+  confidence_caveats: string[];
+};
 
 const useTypedStream = useStream<
   StateType,
@@ -53,9 +91,7 @@ async function checkGraphStatus(
   authScheme?: string,
 ): Promise<boolean> {
   try {
-    const headers = new Headers();
-    if (apiKey) headers.set("X-Api-Key", apiKey);
-    if (authScheme) headers.set("X-Auth-Scheme", authScheme);
+    const headers = new Headers(authHeaders(apiKey, authScheme));
 
     const res = await fetch(`${apiUrl}/info`, {
       headers,
@@ -85,13 +121,9 @@ const StreamSession = ({
   const { getThreads, setThreads } = useThreads();
   const streamValue = useTypedStream({
     apiUrl,
-    apiKey: apiKey ?? undefined,
+    apiKey: authScheme === "bearer" ? undefined : (apiKey ?? undefined),
     assistantId,
-    ...(authScheme && {
-      defaultHeaders: {
-        "X-Auth-Scheme": authScheme,
-      },
-    }),
+    defaultHeaders: authHeaders(apiKey, authScheme),
     threadId: threadId ?? null,
     fetchStateHistory: true,
     onCustomEvent: (event, options) => {
@@ -182,7 +214,11 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   const finalAuthScheme = authScheme || envAuthScheme || "";
 
   // Show the form if we: don't have an API URL, or don't have an assistant ID
-  if (!finalApiUrl || !finalAssistantId) {
+  if (
+    !finalApiUrl ||
+    !finalAssistantId ||
+    (finalAuthScheme === "bearer" && !apiKey)
+  ) {
     return (
       <div className="flex min-h-screen w-full items-center justify-center p-4">
         <div className="animate-in fade-in-0 zoom-in-95 bg-background flex max-w-3xl flex-col rounded-lg border shadow-lg">
@@ -253,7 +289,11 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="apiKey">LangSmith API Key</Label>
+              <Label htmlFor="apiKey">
+                {finalAuthScheme === "bearer"
+                  ? "Access Token"
+                  : "LangSmith API Key"}
+              </Label>
               <p className="text-muted-foreground text-sm">
                 This is <strong>NOT</strong> required if using a local LangGraph
                 server. This value is stored in your browser's local storage and

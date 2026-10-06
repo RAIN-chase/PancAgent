@@ -40,7 +40,7 @@ flowchart TD
 - A failed DA validation is recorded as failed evidence; its phenotype results do not enter the usable state.
 - Regenerating a hypothesis preserves its experimental support, counterevidence and previous tests.
 - Experimental support yields `SUPPORTED`, opposition yields `REFUTED`, and conflicting/absent evidence yields `UNRESOLVED`. Confidence is an ordinal label, never a calibrated probability. Association evidence is rationale, not experimental support.
-- Service deployment must bind user, workspace and project access from authenticated server context. Injected LangGraph state is an integration interface, not an authentication system. Researcher identity on the local CLI is supplied by the operator; production review endpoints require authenticated identity binding.
+- The optional authenticated deployment profile verifies server-managed credentials, project membership, artifact paths and reviewer identity across both graphs, the API and CLI. Local mode is still a trusted operator interface. See [authenticated_deployment.md](authenticated_deployment.md) for setup and deployment checks.
 
 Stages S0-S9 follow the requested scientific process. They are **per-record events**, not a single global project status: parallel hypotheses can be at different stages. S1 means existing structured protocol artifacts are available; it does not mean the deferred extraction workflow ran.
 
@@ -87,9 +87,9 @@ This is an opt-in `h5ad_config` block. Defaults perform no extra LLM calls. Each
 
 ## Execution And Scientific Preconditions
 
-Existing execution gates determine whether PA/DA artifacts are present, valid and joinable. The additional scientific gate checks cell line, differentiation stage, sequencing modality, reference version, endpoint method/scale, numeric phenotype availability and sufficient joinable protocols. Missing metadata is `unknown`; differing metadata is `mismatch`. Five protocols is an engineering screening floor, not a guarantee of biological or statistical validity.
+Existing execution gates determine whether PA/DA artifacts are present, valid and joinable. The scientific gate builds the explicitly requested endpoint cohort and checks cell line, stage, modality, reference version, method, unit, expression scale, normalization, method version, cell population and sampling condition. `source_scale`/unknown labels are not evidence of compatible scales. Only QC-passed numeric endpoint observations enter counts; duplicate sample/endpoint observations and missing biological-replicate identities block numerical merging. The configurable computational floor is at least three protocols and two identified biological replicates per protocol; it is not a power calculation or sufficient statistical evidence.
 
-Protocol comparison remains available as a descriptive operation with caveats. Unknown/mismatched metadata blocks automatic experiment shortlist eligibility; it does not forbid inspecting differences. Causal claims are not enabled by matching metadata.
+Protocol comparison remains descriptive. Unknown/mismatched metadata blocks PO's numeric pooling as well as automatic experiment eligibility, but not inspection. Raw values remain visible with `numeric_merge_allowed=false`. `objective.comparison.stratum` can explicitly select a matched sub-cohort; excluded samples, actual endpoint/protocol/sample/replicate counts and scale profiles are exported. No implicit cross-scale conversion or batch correction is performed. Causal claims are not enabled by matching metadata.
 
 Supply cell_line, stage, sequencing_modality and reference_version in source protocol metadata and DA manifest rows when available. The implementation deliberately does not infer them from paper titles or filename conventions.
 
@@ -104,6 +104,13 @@ Configure `objective.experiment_design` to provide explicit ordinal assessments,
 ```json
 {
   "primary": "increase_beta_like_maturity",
+  "baseline_protocol_id": "REPLACE_BASELINE_PROTOCOL_ID",
+  "applicable_context": {"cell_line": "REPLACE_ACTUAL_CELL_LINE"},
+  "comparison": {
+    "endpoints": ["REPLACE_ACTUAL_METRIC_ENDPOINT"],
+    "minimum_protocols": 3,
+    "minimum_replicates_per_protocol": 2
+  },
   "experiment_design": {
     "max_candidates": 10,
     "select_count": 3,
@@ -136,7 +143,7 @@ phenotype.beta_maturity and phenotype.reference_similarity are `partial` and are
 
 ## Researcher Commands
 
-Run `pip install -e .` to update the `scientific-state` console entry point; alternatively run `python -m protocol_optimization_agent.scientific_state_cli` in the installed backend environment. Commands work on Windows and Linux.
+Run `pip install -e .` to update the `scientific-state` console entry point; alternatively run `python -m protocol_optimization_agent.interfaces.scientific_state_cli` in the installed backend environment. Commands work on Windows and Linux. Explicit review, execution, feedback and admission operations live in `extensions/experimental_feedback/lifecycle.py`; scientific identities and shared persisted contracts remain in `science/`.
 
 ```bash
 scientific-state --user-id local_user --project-id default snapshot
@@ -144,14 +151,42 @@ scientific-state --user-id local_user --project-id default history hypothesis HY
 scientific-state --user-id local_user --project-id default ingest pa runs/protocol_analysis_agent_simplified_autofeatures
 scientific-state --user-id local_user --project-id default ingest da runs/data_analysis
 scientific-state --user-id local_user --project-id default ingest po runs/protocol_optimization
-scientific-state --user-id local_user --project-id default review EXPERIMENT_ID --decision approve --researcher RESEARCHER_ID --reason "Matched design and budget checked"
+scientific-state --user-id local_user --project-id default review EXPERIMENT_ID --evaluation-id EVALUATION_ID --decision approve --researcher RESEARCHER_ID --reason "Matched design and budget checked"
 scientific-state --user-id local_user --project-id default performed EXPERIMENT_ID --researcher RESEARCHER_ID
 scientific-state --user-id local_user --project-id default feedback experimental_feedback.json
+scientific-state --user-id local_user --project-id default admit-feedback feedback_admission.json
 ```
 
 CLI commands are explicit researcher actions. Chat tools cannot approve, mark performed or record results. Eligible proposed experiments can be approved/rejected; only approved experiments can be marked performed; only performed experiments can accept feedback. Feedback requires QC-passed experimental evidence, a matching experiment id, validated numerical phenotype observations, a reviewed outcome for every linked hypothesis and a researcher interpretation. Retrying identical feedback is idempotent; changed feedback cannot overwrite an assessed result.
 
 Use [experimental_feedback.example.json](../examples/experimental_feedback.example.json) as the payload shape. Replace its example identifiers and measurements with actual reviewed experiment and analysis records before ingestion. The schema is also available through `ExperimentFeedback.model_json_schema()`.
+
+## Version-Bound Candidates And Hypotheses (2026-10-01)
+
+Candidate identity is separate from evaluation identity. A PROPOSED candidate can acquire new `evaluation_id`, `evaluation_version`, `evaluated_at`, `input_snapshot`, gate results and assessments. Identical evaluations are idempotent. Reviews require the exact current evaluation ID in a transaction and preserve it as `approved_evaluation_id`; stale reviews fail. Reviewed/executed evaluations are locked. Full previous evaluations remain in history, rather than being overwritten by eligibility changes.
+
+The evaluation content fingerprint and version-specific evaluation ID are distinct: reverting to earlier evaluation content creates a new ID, so an old approval request cannot become valid again after intervening changes.
+
+PO JSON starts as a generation draft. Orchestrator/CLI ingestion persists it and exports candidates/hypotheses from SQLite, including selected evaluation IDs and version-bound pairwise comparisons. Embedded proposal JSON/Markdown are refreshed from the persisted report. Locked candidates cannot be advertised as new approval targets. Direct PO users must ingest the draft before review; generation alone is not approval authority.
+
+`topic_id` groups a feature/objective research theme. A `hypothesis_v2` ID binds a concrete baseline protocol snapshot/version, stage and timing, operation/direction/dose, applicable context, objective and endpoints. Unknown conditions remain explicit and block eligibility. Merely fixing an evaluation or changing its utility does not change candidate identity. Changing the actual intervention/background creates a distinct hypothesis. Regeneration preserves belief only for the exact specification; legacy feature-only hypotheses do not propagate outcomes into v2 hypotheses. Feedback for v2 hypotheses must cite the approved `evaluation_id` and exact `evidence.observations.test_specs` map.
+
+Existing SQLite tables migrate additively through typed payload defaults. PROPOSED legacy candidates are versioned when regenerated/ingested; existing historical reviews/results remain untouched. An old approval without a bound evaluation cannot be newly marked performed: submit a versioned candidate for review instead of pretending the old approval applied to a new evaluation.
+
+## Quantitative Feedback Admission
+
+Recording QC-passed feedback updates the explicitly linked hypothesis and invalidates cache, but **does not yet admit the numbers to PO**. A separate researcher-reviewed `FeedbackAdmission` must bind:
+
+- The assessed experiment and its exact `feedback_digest`.
+- Actual executed protocol: an exact versioned ProtocolState already ingested from PA, with protocol evidence and compiled features. Feedback cannot invent or overwrite final protocol feature values.
+- All treatment sample IDs, a distinct control protocol and existing QC-passed control samples. Unknown/unbound samples or mismatching actual protocol snapshots are rejected.
+- Authenticated reviewer and reason in secure mode (operator-supplied actor in local mode).
+
+The server captures treatment/control PhenotypeState and control ProtocolState snapshots, ignoring caller-supplied phenotype replacements. Admission is immutable/idempotent. Its fingerprint invalidates PO cache independently of recording feedback. Use [feedback_admission.example.json](../examples/feedback_admission.example.json) for the shape; it is intentionally a placeholder, not usable experimental data.
+
+PO merges source DA Phenotype IR and admitted numerical observations into an immutable content-addressed `analysis_dataset.json`. It then rebuilds objective scores, associations, predictions and proposals from that dataset through the endpoint gate; it no longer just carries evidence IDs as history. Admission does not bypass DA readiness or scientific comparability. Source/feedback sample conflicts fail instead of silently replacing an approved snapshot. Rerunning against changed control/actual protocol versions requires reconciling the reviewed binding, not silently rebinding it.
+
+`analysis_result.json` preserves dataset ID, computation fingerprint, objective, protocol scores, associations, prior result ID, admitted experiments and before/after score changes. SQLite retains immutable dataset/result records even when latest run-directory files are replaced. Change summaries distinguish new admitted experiments, changes to base inputs and changes to the objective; they do not attribute causality. Endpoint weights are applied after aggregating each protocol/endpoint so endpoints with more samples do not implicitly receive larger weights. Ordinal design assessments remain researcher judgments and are not silently recalibrated from new measurements.
 
 ## Current Limits
 

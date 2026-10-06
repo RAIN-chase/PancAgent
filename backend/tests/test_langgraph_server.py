@@ -5,7 +5,7 @@ from pathlib import Path
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
-from protocol_optimization_agent.langgraph_server import TOOLS, build_protocol_chat_graph
+from protocol_optimization_agent.interfaces.langgraph_server import TOOLS, build_protocol_chat_graph
 
 
 def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:

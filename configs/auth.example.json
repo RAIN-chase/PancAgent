@@ -1,0 +1,31 @@
+{
+  "workspace_root": "/srv/protocol-agent/runtime",
+  "users": {
+    "alice": {
+      "token_sha256": "REPLACE_WITH_SHA256_OF_A_RANDOM_PER_USER_TOKEN",
+      "projects": { "pancreas": ["read", "write", "review"] }
+    }
+  },
+  "artifacts": {
+    "pa_inputs": {
+      "user_id": "alice", "project_id": "pancreas",
+      "path": "/srv/protocol-agent/runtime/users/alice/projects/pancreas/inputs/protocols",
+      "permissions": ["read"]
+    },
+    "pa_outputs": {
+      "user_id": "alice", "project_id": "pancreas",
+      "path": "/srv/protocol-agent/runtime/users/alice/projects/pancreas/artifacts/pa",
+      "permissions": ["read", "write"]
+    },
+    "da_outputs": {
+      "user_id": "alice", "project_id": "pancreas",
+      "path": "/srv/protocol-agent/runtime/users/alice/projects/pancreas/artifacts/da",
+      "permissions": ["read", "write"]
+    },
+    "h5ad_sample_1": {
+      "user_id": "alice", "project_id": "pancreas",
+      "path": "/srv/protocol-agent/runtime/users/alice/projects/pancreas/inputs/sample_1.h5ad",
+      "permissions": ["read"]
+    }
+  }
+}

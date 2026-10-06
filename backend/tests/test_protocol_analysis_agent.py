@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
-from protocol_optimization_agent.llm_client import StaticMockLLMClient
-from protocol_optimization_agent.query_engine import ProtocolQueryEngine
+from protocol_optimization_agent.analysis.protocol.query_engine import ProtocolQueryEngine
+from protocol_optimization_agent.runtime.llm_client import StaticMockLLMClient
 
 
 def test_protocol_analysis_agent_builds_feature_matrix_and_filters_events(tmp_path: Path) -> None:
@@ -1014,7 +1014,7 @@ def test_protocol_query_layer_compares_generated_outputs(tmp_path: Path) -> None
             "evidence_quote": "T3 was added.",
         },
     ]
-    ProtocolAnalysisAgent(
+    outputs = ProtocolAnalysisAgent(
         output_dir=tmp_path,
         quality_filters={
             "min_protocol_confidence": 0.65,
@@ -1023,7 +1023,7 @@ def test_protocol_query_layer_compares_generated_outputs(tmp_path: Path) -> None
         },
     ).run(records, events, [])
 
-    engine = ProtocolQueryEngine(tmp_path)
+    engine = ProtocolQueryEngine(outputs["protocol_feature_matrix"].parent)
     assert engine.find_protocols("Protocol A")[0]["protocol_id"] == "p1"
     comparison = engine.compare_protocols("p1", "p2")
     assert comparison["status"] == "ok"

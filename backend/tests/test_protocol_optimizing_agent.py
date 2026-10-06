@@ -6,13 +6,15 @@ from pathlib import Path
 
 import pytest
 from protocol_optimization_agent.agents.protocol_optimizing import ProtocolOptimizingAgent
-from protocol_optimization_agent.runtime import RunContext
-from protocol_optimization_agent.scientific_ingestion import (
+from protocol_optimization_agent.analysis.phenotype.representation import METRIC_COLUMNS, build_phenotype_ir
+from protocol_optimization_agent.runtime.context import RunContext
+from protocol_optimization_agent.runtime.io import read_csv_dicts
+from protocol_optimization_agent.science.ingestion import (
     ingest_experiment_proposals,
     ingest_phenotype_outputs,
     ingest_protocol_outputs,
 )
-from protocol_optimization_agent.scientific_state import ScientificWorldModel
+from protocol_optimization_agent.science.state import ScientificWorldModel
 
 
 def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path: Path) -> None:
@@ -104,10 +106,30 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
         '{"protocol_id":"p1","dataset_id":"d1"}\n',
         encoding="utf-8",
     )
+    metadata = {"cell_line": "line1", "stage": "S6", "sequencing_modality": "scRNA", "reference_version": "atlas1",
+                "expression_scale": "fixed_score", "normalization": "fixed_v1", "method_version": "v1",
+                "cell_population": "beta", "sampling_condition": "day30"}
+    matrix_rows = read_csv_dicts(protocol_dir / "protocol_feature_matrix.csv")
+    from protocol_optimization_agent.runtime.io import write_csv_dicts
+    write_csv_dicts(protocol_dir / "protocol_feature_matrix.csv", [{**row, **metadata} for row in matrix_rows])
+    ir = build_phenotype_ir({table: read_csv_dicts(data_dir / f"{table}.csv") for table in METRIC_COLUMNS},
+                            [], {"validation_status": "passed"}, str(data_dir))
+    repeated = []
+    for p in ir["phenotypes"]:
+        for repeat in range(2):
+            sample = json.loads(json.dumps(p))
+            sample["id"] += f"_{repeat}"
+            sample["sample_id"] = f"{p['protocol_id']}_sample{repeat}"
+            sample["metadata"] = {**metadata, "biological_replicate_id": f"r{repeat}"}
+            for metric in sample["metrics"]:
+                metric["id"] += f"_{repeat}"
+                metric["unit"] = "score"
+            repeated.append(sample)
+    (data_dir / "phenotype_ir.json").write_text(json.dumps({**ir, "phenotypes": repeated}), encoding="utf-8")
 
     outputs = ProtocolOptimizingAgent(
         output_dir=output_dir,
-        objective={"primary": "increase_beta_like_maturity"},
+        objective={"primary": "increase_beta_like_maturity", "comparison": {"endpoints": ["beta", "stress", "similarity_scores"]}},
     ).run(
         protocol_dir,
         data_dir,
@@ -157,7 +179,7 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
     assert experiments["reasoning_steps"] == ["generate", "critique", "compare", "rank", "select"]
     assert experiments["candidates"]
     assert experiments["selected_for_review"] == []
-    assert experiments["scientific_preconditions"]["scientific_ready"] is False
+    assert experiments["scientific_preconditions"]["scientific_ready"] is True
     assert experiments["hypotheses"][0]["status"] == "UNRESOLVED"
 
     prediction = json.loads(outputs["counterfactual_protocol_predictions"].read_text(encoding="utf-8"))
@@ -171,7 +193,7 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
     stress_target = next(
         row
         for row in phenotype_targets
-        if row["protocol_id"] == "p1" and row["endpoint"] == "marker_scores:stress"
+        if row["protocol_id"] == "p1" and row["endpoint"] == "stress"
     )
     assert stress_target["direction"] == "lower_is_better"
     assert stress_target["normalization"].startswith("minmax_by_endpoint:")
@@ -180,7 +202,7 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
     store = ScientificWorldModel(RunContext.from_values(user_id="test_user", run_id="r1", workspace_root=tmp_path), "study")
     ingest_protocol_outputs(store, protocol_dir)
     ingest_phenotype_outputs(store, data_dir)
-    ingest_experiment_proposals(store, output_dir)
+    ingest_experiment_proposals(store, outputs["next_experiment_candidates"].parent)
     assert store.snapshot()["counts"]["hypothesis"] == len(experiments["hypotheses"])
     assert store.snapshot()["counts"]["experiment"] == len(experiments["candidates"])
     assert all(not h["evidence_for"] for h in store.snapshot()["records"]["hypothesis"])

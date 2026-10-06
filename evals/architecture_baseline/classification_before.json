@@ -1,0 +1,850 @@
+{
+  "protocol_id": {
+    "pa": "other",
+    "query": "other"
+  },
+  "paper_id": {
+    "pa": "other",
+    "query": "other"
+  },
+  "dataset_id": {
+    "pa": "other",
+    "query": "other"
+  },
+  "protocol_name": {
+    "pa": "other",
+    "query": "other"
+  },
+  "source_identity_status": {
+    "pa": "other",
+    "query": "other"
+  },
+  "confidence_score": {
+    "pa": "audit_or_confidence",
+    "query": "audit_or_confidence"
+  },
+  "comparison_ready": {
+    "pa": "other",
+    "query": "other"
+  },
+  "ordered_reagent_program": {
+    "pa": "other",
+    "query": "workflow"
+  },
+  "action_category_add_reagent_or_factor_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "action_category_add_reagent_or_factor_n_stage_mentions": {
+    "pa": "other",
+    "query": "other"
+  },
+  "action_category_add_reagent_or_factor_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "activin_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "activin_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "activin_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "activin_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "activin_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "activin_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "activin_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "activin_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "alk5i_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "alk5i_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "alk5i_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "alk5i_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "alk5i_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "alk5i_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "alk5i_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "alk5i_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "all_reagent_activin_a_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "all_reagent_activin_a_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "all_reagent_activin_a_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "all_reagent_activin_a_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "all_reagent_activin_a_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "all_reagent_activin_a_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "all_reagent_activin_a_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "all_reagent_activin_a_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "betacellulin_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "betacellulin_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "betacellulin_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "betacellulin_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "betacellulin_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "betacellulin_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "betacellulin_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "betacellulin_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "bmp_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "bmp_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "bmp_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "bmp_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "bmp_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "bmp_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "bmp_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "bmp_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "chir_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "chir_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "chir_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "chir_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "chir_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "chir_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "chir_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "chir_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "egf_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "egf_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "egf_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "egf_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "egf_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "egf_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "egf_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "egf_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "factor_type_reagent_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "factor_type_reagent_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "factor_type_reagent_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "factor_type_reagent_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "fgf_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "fgf_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "fgf_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "fgf_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "fgf_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "fgf_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "fgf_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "fgf_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "gammasecretaseinhibitor_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "gammasecretaseinhibitor_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "gammasecretaseinhibitor_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "gammasecretaseinhibitor_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "gammasecretaseinhibitor_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "gammasecretaseinhibitor_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "gammasecretaseinhibitor_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "gammasecretaseinhibitor_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "graph_max_actions_per_stage": {
+    "pa": "other",
+    "query": "other"
+  },
+  "graph_mean_actions_per_stage": {
+    "pa": "other",
+    "query": "other"
+  },
+  "graph_n_action_nodes": {
+    "pa": "other",
+    "query": "other"
+  },
+  "graph_n_event_edges": {
+    "pa": "other",
+    "query": "other"
+  },
+  "graph_n_next_action_edges": {
+    "pa": "other",
+    "query": "other"
+  },
+  "graph_n_next_stage_edges": {
+    "pa": "other",
+    "query": "other"
+  },
+  "graph_n_reagent_item_nodes": {
+    "pa": "other",
+    "query": "other"
+  },
+  "graph_n_stage_nodes": {
+    "pa": "other",
+    "query": "other"
+  },
+  "has_2d_adherent_culture": {
+    "pa": "culture_system",
+    "query": "culture_system"
+  },
+  "has_aggregation": {
+    "pa": "culture_system",
+    "query": "culture_system"
+  },
+  "has_cell_passage": {
+    "pa": "other",
+    "query": "other"
+  },
+  "has_dissociation": {
+    "pa": "other",
+    "query": "other"
+  },
+  "has_medium_change": {
+    "pa": "other",
+    "query": "other"
+  },
+  "has_shaking": {
+    "pa": "culture_system",
+    "query": "culture_system"
+  },
+  "has_suspension_culture": {
+    "pa": "culture_system",
+    "query": "culture_system"
+  },
+  "heparin_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "heparin_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "heparin_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "heparin_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "heparin_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "heparin_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "heparin_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "heparin_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "kgf_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "kgf_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "kgf_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "kgf_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "kgf_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "kgf_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "kgf_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "kgf_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "ldn_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "ldn_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "ldn_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "ldn_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "ldn_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "ldn_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "ldn_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "ldn_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "matrigel_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "matrigel_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "matrigel_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "matrigel_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "matrigel_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "matrigel_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "matrigel_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "matrigel_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "max_stage_duration": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "mean_stage_duration": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "motif_action_add_reagent_uses_reagent_activin_a": {
+    "pa": "other",
+    "query": "other"
+  },
+  "n_semantic_stage_annotations": {
+    "pa": "other",
+    "query": "other"
+  },
+  "n_strategy_modules": {
+    "pa": "strategy_module",
+    "query": "strategy_module"
+  },
+  "nicotinamide_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "nicotinamide_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "nicotinamide_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "nicotinamide_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "nicotinamide_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "nicotinamide_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "nicotinamide_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "nicotinamide_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "norm_family_tgf_beta_nodal_activation_family_end_day": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "norm_family_tgf_beta_nodal_activation_family_fallback_fraction": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "norm_family_tgf_beta_nodal_activation_family_n_events": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "norm_family_tgf_beta_nodal_activation_family_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "norm_family_tgf_beta_nodal_activation_family_start_day": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "norm_family_tgf_beta_nodal_activation_family_total_exposure": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "num_add_reagent_actions": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "num_aggregation_actions": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "num_dissociation_actions": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "num_wash_actions": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "number_of_stages": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "ra_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "ra_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "ra_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "ra_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "ra_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "ra_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "ra_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "ra_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "requires_cell_dissociation": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "requires_cell_number_threshold": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "requires_previous_stage_completion": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "rocki_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "rocki_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "rocki_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "rocki_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "rocki_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "rocki_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "rocki_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "rocki_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "sant_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "sant_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "sant_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "sant_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "sant_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "sant_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "sant_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "sant_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "semantic_module_definitive_endoderm_induction_presence": {
+    "pa": "strategy_module",
+    "query": "strategy_module"
+  },
+  "stage_transition_number": {
+    "pa": "workflow",
+    "query": "workflow"
+  },
+  "t3_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "t3_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "t3_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "t3_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "t3_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "t3_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "t3_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "t3_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "total_days": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "vitaminc_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "vitaminc_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "vitaminc_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "vitaminc_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "vitaminc_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "vitaminc_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "vitaminc_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "vitaminc_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "znso4_concentration_comparability": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "znso4_end_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "znso4_max_concentration": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "znso4_max_concentration_unit": {
+    "pa": "concentration",
+    "query": "concentration"
+  },
+  "znso4_n_events": {
+    "pa": "other",
+    "query": "other"
+  },
+  "znso4_presence": {
+    "pa": "core_signaling_family",
+    "query": "core_signaling_family"
+  },
+  "znso4_start_day": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  },
+  "znso4_total_exposure": {
+    "pa": "timing_or_exposure",
+    "query": "timing_or_exposure"
+  }
+}

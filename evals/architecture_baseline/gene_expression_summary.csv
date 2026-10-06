@@ -1,0 +1,4 @@
+protocol_id,dataset_id,sample_id,gene,mean_expression,unit,status,expression_scale,normalization,method_version,cell_population,sampling_condition,biological_replicate_id
+baseline_a,data_a,sample_a,INS,0,normalized_counts,ok,normalized_counts,total_count,synthetic_v1,beta_like,day_3,rep_a
+baseline_b,data_b,sample_b,INS,2.5,normalized_counts,ok,normalized_counts,total_count,synthetic_v1,beta_like,day_3,rep_b
+baseline_unknown,data_unknown,sample_unknown,INS,0,normalized_counts,pending,normalized_counts,total_count,synthetic_v1,beta_like,day_3,rep_unknown

@@ -6,16 +6,16 @@ from pathlib import Path
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from protocol_optimization_agent.action_space import action_registry
+from protocol_optimization_agent.agents.actions import action_registry
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
-from protocol_optimization_agent.orchestrator_agent import (
+from protocol_optimization_agent.agents.orchestrator import (
     _optimization_cache_key,
     build_orchestrator_graph,
     execute_scientific_action,
 )
-from protocol_optimization_agent.runtime import RunContext
-from protocol_optimization_agent.scientific_models import DecisionAssessment, ExperimentCandidate, Hypothesis
-from protocol_optimization_agent.scientific_state import ScientificWorldModel
+from protocol_optimization_agent.runtime.context import RunContext
+from protocol_optimization_agent.science.models import DecisionAssessment, ExperimentCandidate, Hypothesis
+from protocol_optimization_agent.science.state import ScientificWorldModel
 
 
 def test_orchestrator_action_compares_protocols_and_persists_state(tmp_path: Path) -> None:
@@ -58,7 +58,8 @@ def test_orchestrator_action_compares_protocols_and_persists_state(tmp_path: Pat
     )
     response = json.loads(next(m.content for m in result["messages"] if isinstance(m, ToolMessage)))
     assert response["status"] == "ok"
-    assert response["result"]["tool_result"]["feature_differences"]
+    assert response["result_refs"] == [result["step_results"][0]["result_ref"]]
+    assert response["result_preview"]["tool_result"]["feature_differences"]
     assert response["scientific_preconditions"]["status"] == "descriptive_only"
     store = ScientificWorldModel(
         RunContext.from_values(user_id="alice", run_id="run2", workspace_root=tmp_path), "pancreas"
@@ -81,7 +82,10 @@ def test_action_registry_deferred_extraction_and_runtime_argument_gate(tmp_path:
     )
     assert result["status"] == "deferred"
     assert result["executed"] is False
-    assert result["action"]["implementation"] == "Protocol_extraction"
+    assert result["action_id"] == "protocol.extract"
+    assert result["validation"]["available"] is False
+    assert "Protocol_extraction" in next(action["implementation"] for action in action_registry()["actions"]
+                                         if action["id"] == result["action_id"])
     with pytest.raises(ValueError, match="undeclared"):
         execute_scientific_action.invoke(
             {
@@ -131,7 +135,7 @@ def test_experiment_review_invalidates_po_cache(tmp_path: Path) -> None:
         "S5",
     )
     key1 = _optimization_cache_key(tmp_path / "pa", tmp_path / "da", {}, {}, store.feedback_fingerprint())
-    store.review("exp1", True, "Alice", "reviewed")
+    store.review("exp1", True, "Alice", "reviewed", evaluation_id=store.get("experiment", "exp1")["evaluation_id"])
     key2 = _optimization_cache_key(tmp_path / "pa", tmp_path / "da", {}, {}, store.feedback_fingerprint())
     assert key1 != key2
     data_dir = tmp_path / "da"

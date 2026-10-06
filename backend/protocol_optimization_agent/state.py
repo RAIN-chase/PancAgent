@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from protocol_optimization_agent.config import ProtocolOptimizationConfig
+from protocol_optimization_agent.runtime.config import ProtocolOptimizationConfig
 
 
 @dataclass
@@ -15,6 +15,7 @@ class PipelineState:
     missing_inputs: list[str] = field(default_factory=list)
     protocol_records: list[dict[str, Any]] = field(default_factory=list)
     factor_events: list[dict[str, Any]] = field(default_factory=list)
+    source_identity_rows: list[dict[str, Any]] = field(default_factory=list)
     h5ad_manifest: list[dict[str, Any]] = field(default_factory=list)
     protocol_outputs: dict[str, Path] = field(default_factory=dict)
     h5ad_outputs: dict[str, Path] = field(default_factory=dict)

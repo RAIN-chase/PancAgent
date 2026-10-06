@@ -10,3 +10,8 @@ inputs/
 .tmp/
 *.h5ad
 external_tools/
+configs/auth.local.json
+*.tsbuildinfo
+build/
+dist/
+*.egg-info/

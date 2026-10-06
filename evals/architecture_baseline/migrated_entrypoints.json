@@ -1,0 +1,15 @@
+{
+  "graphs": {
+    "protocol_chat": "./backend/protocol_optimization_agent/interfaces/langgraph_server.py:graph",
+    "orchestrator": "./backend/protocol_optimization_agent/agents/orchestrator.py:graph"
+  },
+  "cli": {
+    "protocol-optimization-agent": "protocol_optimization_agent.interfaces.cli:main",
+    "protocol-analysis-agent": "protocol_optimization_agent.interfaces.protocol_analysis_cli:main",
+    "protocol-query": "protocol_optimization_agent.interfaces.protocol_query_cli:main",
+    "protocol-api": "protocol_optimization_agent.interfaces.api:main",
+    "scientific-state": "protocol_optimization_agent.interfaces.scientific_state_cli:main",
+    "run-archive": "protocol_optimization_agent.interfaces.run_archive_cli:main"
+  },
+  "auth": "./backend/protocol_optimization_agent/interfaces/server_auth.py:auth"
+}

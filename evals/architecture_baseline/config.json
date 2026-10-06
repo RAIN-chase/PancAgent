@@ -1,0 +1,5 @@
+{
+  "quality_filters": {"min_protocol_confidence": 0.65, "require_comparison_ready": true},
+  "llm": "offline",
+  "phenotype_source": "evals/architecture_baseline"
+}

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
+from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
+from protocol_optimization_agent.agents.protocol_optimizing import ProtocolOptimizingAgent
 
 
 @dataclass(frozen=True)
@@ -11,10 +17,35 @@ class SubgraphSpec:
     edges: tuple[tuple[str, str, str | None], ...]
 
 
-PROTOCOL_ANALYSIS_SUBGRAPH = SubgraphSpec(
+def _describe_graph(
+    graph: Any,
+    graph_id: str,
+    title: str,
+    labels: dict[str, str],
+    edge_notes: dict[tuple[str, str], str],
+) -> SubgraphSpec:
+    """Derive executable topology; keep only scientific annotations by hand."""
+    if graph.branches:
+        raise ValueError("Conditional graphs require explicit branch rendering, not an incomplete diagram.")
+    if set(labels) - set(graph.nodes) or set(edge_notes) - graph.edges:
+        raise ValueError(f"Stale graph annotations: {graph_id}")
+    positions = {node: index for index, node in enumerate(graph.nodes)}
+    edges = sorted(
+        ((source, target) for source, target in graph.edges if source in positions and target in positions),
+        key=lambda pair: (positions[pair[0]], positions[pair[1]]),
+    )
+    return SubgraphSpec(
+        graph_id=graph_id, title=title,
+        nodes={node: labels.get(node, node) for node in graph.nodes},
+        edges=tuple((source, target, edge_notes.get((source, target))) for source, target in edges),
+    )
+
+
+PROTOCOL_ANALYSIS_SUBGRAPH = _describe_graph(
+    ProtocolAnalysisAgent(Path("."), {}).build_langgraph(compile_graph=False),
     graph_id="protocol_analysis_agent",
     title="Protocol Analysis Agent",
-    nodes={
+    labels={
         "protocol_input_quality_gate": "Input quality gate",
         "protocol_schema_validator": "Protocol schema validator",
         "stage_timeline_builder": "Stage timeline builder",
@@ -25,26 +56,28 @@ PROTOCOL_ANALYSIS_SUBGRAPH = SubgraphSpec(
         "protocol_relationship_analyzer": "Protocol relationship analyzer",
         "protocol_difference_report": "Factor difference report",
         "quality_and_evidence_auditor": "Quality and evidence auditor",
+        "export_results": "Export audited protocol artifacts",
     },
-    edges=(
-        ("protocol_input_quality_gate", "protocol_schema_validator", None),
-        ("protocol_schema_validator", "stage_timeline_builder", "LLM only for incomplete time"),
-        ("stage_timeline_builder", "factor_event_normalizer", "LLM candidate + rule validation"),
-        ("factor_event_normalizer", "protocol_semantic_interpreter", "normalized factors + evidence"),
-        ("protocol_semantic_interpreter", "cross_protocol_feature_matrix", "semantic modules as features"),
-        ("cross_protocol_feature_matrix", "feature_discovery", "LLM proposes columns; code audits and computes"),
-        ("feature_discovery", "protocol_relationship_analyzer", "final matrix + candidate matrix"),
-        ("protocol_relationship_analyzer", "protocol_difference_report", "computed diffs"),
-        ("protocol_difference_report", "quality_and_evidence_auditor", "contradiction and provenance checks"),
-    ),
+    edge_notes={
+        ("protocol_schema_validator", "stage_timeline_builder"): "structured timing; unknown stays unknown",
+        ("stage_timeline_builder", "factor_event_normalizer"): "LLM candidate + rule validation",
+        ("factor_event_normalizer", "protocol_semantic_interpreter"): "normalized factors + evidence",
+        ("protocol_semantic_interpreter", "cross_protocol_feature_matrix"): "semantic modules as features",
+        ("cross_protocol_feature_matrix", "feature_discovery"): "LLM proposes columns; code audits and computes",
+        ("feature_discovery", "protocol_relationship_analyzer"): "final matrix + candidate matrix",
+        ("protocol_relationship_analyzer", "protocol_difference_report"): "computed diffs",
+        ("protocol_difference_report", "quality_and_evidence_auditor"): "contradiction and provenance checks",
+    },
 )
 
 
-H5AD_ANALYSIS_SUBGRAPH = SubgraphSpec(
+H5AD_ANALYSIS_SUBGRAPH = _describe_graph(
+    DataAnalysisAgent(Path("."), {}).build_langgraph(compile_graph=False),
     graph_id="data_analysis_agent",
     title="Data Analysis Agent",
-    nodes={
+    labels={
         "data_input_gate": "Reference atlas, organoid h5ad, and gene program gate",
+        "analysis_execution_planner": "Plan requested analyses and dependencies",
         "dataset_inventory_builder": "Dataset inventory builder",
         "metadata_and_qc_summary": "Metadata and QC summary",
         "cell_type_composition_analysis": "Cell type composition analysis",
@@ -56,27 +89,22 @@ H5AD_ANALYSIS_SUBGRAPH = SubgraphSpec(
         "aggregate_quantitative_comparison": "Dataset quantitative comparison aggregation",
         "data_analysis_audit": "Data analysis limitations audit",
         "phenotype_representation": "Numeric Phenotype IR and optional interpretation consensus",
+        "export_results": "Export audited data analysis artifacts",
     },
-    edges=(
-        ("data_input_gate", "dataset_inventory_builder", None),
-        ("dataset_inventory_builder", "metadata_and_qc_summary", None),
-        ("metadata_and_qc_summary", "cell_type_composition_analysis", None),
-        ("cell_type_composition_analysis", "marker_and_gene_program_scoring", None),
-        ("marker_and_gene_program_scoring", "maturity_scoring", "user gene programs"),
-        ("maturity_scoring", "reference_similarity_analysis", "matched lineages and cell types"),
-        ("reference_similarity_analysis", "regulatory_and_trajectory_placeholders", "optional external tools"),
-        ("regulatory_and_trajectory_placeholders", "external_tool_inventory", None),
-        ("external_tool_inventory", "aggregate_quantitative_comparison", None),
-        ("aggregate_quantitative_comparison", "data_analysis_audit", None),
-        ("data_analysis_audit", "phenotype_representation", "one numerical snapshot; independent interpretations"),
-    ),
+    edge_notes={
+        ("marker_and_gene_program_scoring", "maturity_scoring"): "user gene programs",
+        ("maturity_scoring", "reference_similarity_analysis"): "matched lineages and cell types",
+        ("reference_similarity_analysis", "regulatory_and_trajectory_placeholders"): "optional external tools",
+        ("data_analysis_audit", "phenotype_representation"): "one numerical snapshot; independent interpretations",
+    },
 )
 
 
-PROTOCOL_OPTIMIZING_SUBGRAPH = SubgraphSpec(
+PROTOCOL_OPTIMIZING_SUBGRAPH = _describe_graph(
+    ProtocolOptimizingAgent(Path(".")).build_langgraph(compile_graph=False),
     graph_id="protocol_optimizing_agent",
     title="Protocol Optimizing Agent",
-    nodes={
+    labels={
         "integration_input_gate": "Load and validate Protocol/Data Agent outputs",
         "phenotype_target_builder": "Build multi-endpoint maturity targets",
         "protocol_phenotype_joiner": "Join protocol features with phenotype summaries",
@@ -88,17 +116,12 @@ PROTOCOL_OPTIMIZING_SUBGRAPH = SubgraphSpec(
         "optimization_audit": "Evidence, uncertainty, and risk audit",
         "export_results": "Export optimization contracts",
     },
-    edges=(
-        ("integration_input_gate", "phenotype_target_builder", None),
-        ("phenotype_target_builder", "protocol_phenotype_joiner", None),
-        ("protocol_phenotype_joiner", "protocol_phenotype_association_analyzer", None),
-        ("protocol_phenotype_association_analyzer", "mechanistic_evidence_ranker", "association, not causality"),
-        ("mechanistic_evidence_ranker", "counterfactual_protocol_scorer", None),
-        ("counterfactual_protocol_scorer", "optimized_protocol_generator", "relative prediction only"),
-        ("optimized_protocol_generator", "experiment_design", "scientific comparability + explicit decision assessments"),
-        ("experiment_design", "optimization_audit", "researcher review required"),
-        ("optimization_audit", "export_results", None),
-    ),
+    edge_notes={
+        ("protocol_phenotype_association_analyzer", "mechanistic_evidence_ranker"): "association, not causality",
+        ("counterfactual_protocol_scorer", "optimized_protocol_generator"): "relative prediction only",
+        ("optimized_protocol_generator", "experiment_design"): "scientific comparability + explicit decision assessments",
+        ("experiment_design", "optimization_audit"): "researcher review required",
+    },
 )
 
 
@@ -114,8 +137,9 @@ def render_core_agent_subgraphs_mermaid() -> str:
     for spec in CORE_AGENT_SUBGRAPHS:
         lines.append(f"  subgraph {spec.graph_id}[{_quote_label(spec.title)}]")
         for node_id, label in spec.nodes.items():
-            lines.append(f"    {node_id}[{_quote_label(label)}]")
+            lines.append(f"    {spec.graph_id}__{node_id}[{_quote_label(label)}]")
         for source, target, edge_label in spec.edges:
+            source, target = f"{spec.graph_id}__{source}", f"{spec.graph_id}__{target}"
             if edge_label:
                 lines.append(f"    {source} -->|{_quote_label(edge_label)}| {target}")
             else:
@@ -123,10 +147,8 @@ def render_core_agent_subgraphs_mermaid() -> str:
         lines.append("  end")
     lines.extend(
         [
-            "  protocol_difference_report --> integration_input_gate",
-            "  quality_and_evidence_auditor --> integration_input_gate",
-            "  aggregate_quantitative_comparison --> integration_input_gate",
-            "  data_analysis_audit --> integration_input_gate",
+            "  protocol_analysis_agent__export_results --> protocol_optimizing_agent__integration_input_gate",
+            "  data_analysis_agent__export_results --> protocol_optimizing_agent__integration_input_gate",
         ]
     )
     return "\n".join(lines)

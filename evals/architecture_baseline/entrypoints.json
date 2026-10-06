@@ -1,0 +1,34 @@
+{
+  "graphs": {
+    "protocol_chat": "./backend/protocol_optimization_agent/langgraph_server.py:graph",
+    "orchestrator": "./backend/protocol_optimization_agent/orchestrator_agent.py:graph"
+  },
+  "cli": {
+    "protocol-optimization-agent": "protocol_optimization_agent.cli:main",
+    "protocol-analysis-agent": "protocol_optimization_agent.protocol_analysis_cli:main",
+    "protocol-query": "protocol_optimization_agent.protocol_query_cli:main",
+    "protocol-api": "protocol_optimization_agent.api:main",
+    "scientific-state": "protocol_optimization_agent.scientific_state_cli:main",
+    "run-archive": "protocol_optimization_agent.run_archive_cli:main"
+  },
+  "api": {
+    "/health": ["GET"],
+    "/protocol-analysis/run": ["POST"],
+    "/protocol-query/find": ["POST"],
+    "/protocol-query/compare": ["POST"],
+    "/protocol-query/chat": ["POST"],
+    "/scientific/experiments/review": ["POST"],
+    "/scientific/experiments/performed": ["POST"],
+    "/scientific/experiments/feedback": ["POST"],
+    "/scientific/experiments/admit-feedback": ["POST"]
+  },
+  "environment_variables": [
+    "PROTOCOL_ANALYSIS_OUTPUT_DIR", "DATA_ANALYSIS_OUTPUT_DIR", "PROTOCOL_OPTIMIZATION_OUTPUT_DIR",
+    "PROTOCOL_WORKSPACE_ROOT", "PROTOCOL_USER_ID", "PROTOCOL_RUN_ID", "PROTOCOL_TRACE_ID",
+    "PROTOCOL_DATASET_REGISTRY", "PROTOCOL_ALLOW_EXTERNAL_OUTPUT_DIR", "PROTOCOL_QUERY_MAX_FEATURES",
+    "PROTOCOL_RESEARCH_PROJECT_ID", "PROTOCOL_ACCESS_MODE", "PROTOCOL_AUTH_CONFIG", "PROTOCOL_AUTH_TOKEN",
+    "DEEPSEEK_API_KEY", "PROTOCOL_CHAT_LLM_PROVIDER", "PROTOCOL_CHAT_MODEL", "PROTOCOL_CHAT_API_KEY_ENV",
+    "PROTOCOL_CHAT_BASE_URL", "PROTOCOL_CHAT_TEMPERATURE", "PROTOCOL_CHAT_TIMEOUT_SECONDS"
+  ],
+  "output_contract": "Returned artifact paths are inside a fresh run beneath the requested output root; callers must use returned paths, not a fixed root filename."
+}

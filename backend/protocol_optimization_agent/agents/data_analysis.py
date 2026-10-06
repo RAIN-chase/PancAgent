@@ -4,19 +4,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict
 
-from protocol_optimization_agent.io import write_csv_dicts, write_json, write_jsonl
-from protocol_optimization_agent.llm_client import LLMClient, build_llm_client
-from protocol_optimization_agent.scientific_reasoning import (
-    CONTEXT_FIELDS,
-    build_phenotype_ir,
-    interpret_phenotypes,
-    make_phenotype_interpreter,
-)
-from protocol_optimization_agent.tools.external_data_tools import (
+from protocol_optimization_agent.analysis.phenotype.external_tools import (
     build_external_tool_inventory,
     get_external_data_analysis_tools,
 )
-from protocol_optimization_agent.tools.h5ad_tools import (
+from protocol_optimization_agent.analysis.phenotype.h5ad_tools import (
     DATA_ANALYSIS_TOOL_REGISTRY,
     build_placeholder_composition_rows,
     build_placeholder_gene_program_rows,
@@ -32,6 +24,15 @@ from protocol_optimization_agent.tools.h5ad_tools import (
     score_gene_program_maturity_placeholder,
     validate_data_analysis_inputs,
 )
+from protocol_optimization_agent.analysis.phenotype.representation import (
+    CONTEXT_FIELDS,
+    build_phenotype_ir,
+    interpret_phenotypes,
+    make_phenotype_interpreter,
+)
+from protocol_optimization_agent.runtime.archive import audited_agent_run, audited_operation
+from protocol_optimization_agent.runtime.io import write_csv_dicts, write_json, write_jsonl
+from protocol_optimization_agent.runtime.llm_client import LLMClient, build_llm_client
 
 
 class DataAnalysisState(TypedDict, total=False):
@@ -97,6 +98,7 @@ class DataAnalysisAgent:
             self.interpreter = make_phenotype_interpreter(client, interpretation.get("claims", []),
                                                         int(interpretation.get("max_metrics", 200)))
 
+    @audited_agent_run
     def run(
         self,
         manifest_rows: list[dict[str, Any]],
@@ -116,6 +118,7 @@ class DataAnalysisAgent:
         final_state = self.build_langgraph().invoke(initial_state)
         return final_state["outputs"]
 
+    @audited_operation
     def call_tool(self, tool_id: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
         """Call one registered external data-analysis tool wrapper by id."""
         if tool_id not in self.callable_tools:
@@ -184,6 +187,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "data_input_gate"),
         }
 
+    @audited_operation
     def _node_analysis_execution_planner(self, state: DataAnalysisState) -> DataAnalysisState:
         requested_mode = str(state.get("analysis_mode") or "standard").lower()
         mode = requested_mode if requested_mode in {"standard", "exploratory"} else "standard"
@@ -219,6 +223,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "analysis_execution_planner"),
         }
 
+    @audited_operation
     def _node_dataset_inventory_builder(self, state: DataAnalysisState) -> DataAnalysisState:
         summaries: list[dict[str, Any]] = []
         limitations: list[dict[str, Any]] = []
@@ -238,6 +243,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "dataset_inventory_builder"),
         }
 
+    @audited_operation
     def _node_metadata_and_qc_summary(self, state: DataAnalysisState) -> DataAnalysisState:
         qc_rows = [_build_qc_row(row) for row in state.get("dataset_summaries", [])]
         return {
@@ -246,6 +252,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "metadata_and_qc_summary"),
         }
 
+    @audited_operation
     def _node_cell_type_composition_analysis(self, state: DataAnalysisState) -> DataAnalysisState:
         rows: list[dict[str, Any]] = []
         for row in state.get("normalized_manifest_rows", []):
@@ -257,6 +264,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "cell_type_composition_analysis"),
         }
 
+    @audited_operation
     def _node_marker_and_gene_program_scoring(self, state: DataAnalysisState) -> DataAnalysisState:
         marker_rows: list[dict[str, Any]] = []
         gene_program_rows: list[dict[str, Any]] = []
@@ -295,6 +303,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "marker_and_gene_program_scoring"),
         }
 
+    @audited_operation
     def _node_maturity_scoring(self, state: DataAnalysisState) -> DataAnalysisState:
         rows: list[dict[str, Any]] = []
         for row in state.get("normalized_manifest_rows", []):
@@ -305,6 +314,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "maturity_scoring"),
         }
 
+    @audited_operation
     def _node_reference_similarity_analysis(self, state: DataAnalysisState) -> DataAnalysisState:
         rows: list[dict[str, Any]] = []
         for row in state.get("normalized_manifest_rows", []):
@@ -315,6 +325,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "reference_similarity_analysis"),
         }
 
+    @audited_operation
     def _node_regulatory_and_trajectory_placeholders(self, state: DataAnalysisState) -> DataAnalysisState:
         regulatory_rows: list[dict[str, Any]] = []
         trajectory_rows: list[dict[str, Any]] = []
@@ -328,6 +339,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "regulatory_and_trajectory_placeholders"),
         }
 
+    @audited_operation
     def _node_external_tool_inventory(self, state: DataAnalysisState) -> DataAnalysisState:
         return {
             **state,
@@ -335,6 +347,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "external_tool_inventory"),
         }
 
+    @audited_operation
     def _node_aggregate_quantitative_comparison(self, state: DataAnalysisState) -> DataAnalysisState:
         protocol_summary_rows = _build_protocol_summary_rows(state.get("dataset_summaries", []))
         report = {
@@ -366,6 +379,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "aggregate_quantitative_comparison"),
         }
 
+    @audited_operation
     def _node_data_analysis_audit(self, state: DataAnalysisState) -> DataAnalysisState:
         limitations = list(state.get("limitations", []))
         for finding in state.get("input_gate_report", {}).get("findings", []):
@@ -378,6 +392,7 @@ class DataAnalysisAgent:
             "step_log": _append_step(state, "data_analysis_audit"),
         }
 
+    @audited_operation
     def _node_phenotype_representation(self, state: DataAnalysisState) -> DataAnalysisState:
         tables = {
             "cell_type_composition": state.get("composition_rows", []),
@@ -397,6 +412,7 @@ class DataAnalysisAgent:
         return {**state, "phenotype_ir": phenotype_ir, "interpretation_report": interpretation,
                 "step_log": _append_step(state, "phenotype_representation")}
 
+    @audited_operation
     def _node_export_results(self, state: DataAnalysisState) -> DataAnalysisState:
         outputs = self._output_paths()
         write_jsonl(outputs["h5ad_summary_by_protocol"], state.get("dataset_summaries", []))
@@ -449,7 +465,7 @@ class DataAnalysisAgent:
                 "status": "ready_for_orchestrator_dispatch",
                 "analysis_mode": state.get("analysis_mode", "standard"),
                 "validation_status": state.get("validation_report", {}).get("validation_status", "failed"),
-                "po_ready": state.get("validation_report", {}).get("po_ready", False),
+                "task_validity": state.get("validation_report", {}).get("task_validity", {}),
                 "supported_operations": [
                     "summary",
                     "cell_type_composition",
@@ -706,12 +722,43 @@ def _build_validation_report(
 
     exploratory_check = _exploratory_validation_check(state)
     checks.append(exploratory_check)
-    passed = all(check["passed"] for check in checks)
+    technical_checks = [check for check in checks if check["check_id"] in {"manifest_identity", "cell_selection", "exploratory_artifacts"}]
+    technical_ok = all(check["passed"] for check in technical_checks)
+    metric_specs = {
+        "cell_type_composition": (state.get("composition_rows", []), ("n_cells",)),
+        "gene_expression": (expression_rows, ("mean_expression",)),
+        "marker_score": (state.get("marker_rows", []), ("mean_score",)),
+        "differential_expression": (de_rows, ("mean_diff",)),
+        "maturity": (state.get("maturity_rows", []), ("maturity_score",)),
+        "reference_similarity": (state.get("similarity_rows", []), ("cosine_similarity", "euclidean_distance")),
+    }
+    metric_status = {name: _numeric_rows_validation_check(name, rows, fields, detail="Task-specific numeric validity.")
+                     for name, (rows, fields) in metric_specs.items()}
+    if not next(check["passed"] for check in checks if check["check_id"] == "expression_scale"):
+        metric_status["differential_expression"]["passed"] = False
+        metric_status["differential_expression"]["status"] = "failed"
+    requested_tasks = config.get("requested_tasks") or ["cell_type_composition"]
+    if not isinstance(requested_tasks, list) or any(not isinstance(task, str) or task not in metric_specs for task in requested_tasks):
+        raise ValueError("requested_tasks must be a list of supported analysis tasks")
+    if config.get("query_genes"):
+        requested_tasks = [*requested_tasks, "gene_expression"]
+    if config.get("differential_expression"):
+        requested_tasks = [*requested_tasks, "differential_expression"]
+    passed = technical_ok and all(metric_status.get(task, {}).get("passed") is True for task in requested_tasks)
     return {
-        "schema_version": "data-analysis-validation-v1",
+        "schema_version": "data-analysis-validation-v2",
         "analysis_mode": state.get("analysis_mode", "standard"),
         "validation_status": "passed" if passed else "failed",
-        "po_ready": passed,
+        "requested_tasks": sorted(set(requested_tasks)),
+        "technical_qc": {"passed": technical_ok, "checks": technical_checks},
+        "metric_status": metric_status,
+        "task_validity": {task: {"valid": technical_ok and value["passed"], "checks": value}
+                          for task, value in metric_status.items()},
+        "statistical_applicability": {
+            "differential_expression": "exploratory_replicate_level" if de_rows and all(
+                str(row.get("inference_eligible")).lower() == "true" for row in de_rows) else "descriptive_only",
+            "policy": "Technical success is not independent-replicate inference or protocol comparability.",
+        },
         "checks": checks,
         "n_limitations": len(limitations),
         "quality_interpretation": (
@@ -754,7 +801,7 @@ def _numeric_rows_validation_check(
     detail: str,
 ) -> dict[str, Any]:
     passed = bool(rows) and all(
-        str(row.get("status") or "") not in {"pending", "input_data_pending"}
+        str(row.get("status") or "") in {"ok", "numeric", "computed", "passed"}
         and all(_is_finite_number(row.get(field)) for field in numeric_fields)
         for row in rows
     )

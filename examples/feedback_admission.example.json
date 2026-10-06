@@ -1,0 +1,18 @@
+{
+  "id": "REPLACED_BY_SERVER",
+  "experiment_id": "REPLACE_ASSESSED_EXPERIMENT_ID",
+  "feedback_digest": "REPLACE_PERSISTED_FEEDBACK_DIGEST",
+  "executed_protocol": {
+    "id": "REPLACE_CANONICAL_PROTOCOL_STATE_ID",
+    "version": 1,
+    "protocol_id": "REPLACE_ACTUAL_EXECUTED_PROTOCOL_VERSION_ID",
+    "metadata": {},
+    "features": {},
+    "evidence_ids": ["REPLACE_PA_PROTOCOL_EVIDENCE_ID"]
+  },
+  "treatment_sample_ids": ["REPLACE_TREATMENT_SAMPLE_ID"],
+  "control_protocol_id": "REPLACE_MATCHED_CONTROL_PROTOCOL_ID",
+  "control_sample_ids": ["REPLACE_CONTROL_SAMPLE_ID"],
+  "researcher": "REPLACE_AUTHENTICATED_RESEARCHER_ID",
+  "reason": "Replace with the review of actual compiled protocol features, sample identity and matched controls."
+}
