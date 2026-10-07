@@ -83,16 +83,18 @@ def test_flow_graph_and_validated_dependency_contract(monkeypatch):
         initialize_budget({"max_tool_calls": 999})
 
 
-def test_duplicate_call_stops_without_second_execution(tmp_path, monkeypatch):
+def test_duplicate_call_reuses_result_without_second_execution(tmp_path, monkeypatch):
     state = inputs(tmp_path)
     state["request"] = {"plan": {"question": "Protocol A", "steps": [plan_step(), plan_step(step_id="s2")]}}
     result = graph(monkeypatch).invoke(state)
-    assert result["stop_reason"] == "no_new_evidence:duplicate_call"
-    assert len(result["step_results"]) == 1
+    assert result["stop_reason"] == "completed"
+    assert len(result["step_results"]) == 2
+    assert result["step_results"][1]["status"] == "skipped_duplicate"
+    assert not result["step_results"][1]["executed"]
     assert not {"analysis_plan", "iteration_count", "evidence_gaps", "final_report", "active_step",
                 "call_signatures", "evidence_signatures", "requested_plan"}.intersection(result)
     assert "plan" not in result["request"]
-    assert len(result["step_results"]) == 1
+    assert sum(step["executed"] for step in result["step_results"]) == 1
     assert result["messages"][-1].additional_kwargs["analysis_report"]["stop_reason"] == result["stop_reason"]
 
 
@@ -140,7 +142,9 @@ def test_missing_evidence_stops_and_failed_dependencies_do_not_execute(tmp_path,
     result = graph(monkeypatch).invoke(state)
     assert result["stop_reason"].startswith("evidence_insufficient")
     assert result["plan"]["evidence_gaps"]
-    assert len(result["step_results"]) == 1
+    assert len(result["step_results"]) == 2
+    assert result["step_results"][1]["status"] == "blocked_dependency"
+    assert not result["step_results"][1]["executed"]
 
 
 def test_model_revision_and_repeated_evidence_are_bounded(tmp_path):
@@ -158,8 +162,9 @@ def test_model_revision_and_repeated_evidence_are_bounded(tmp_path):
         ]
     )
     result = orchestrator.build_orchestrator_graph(model).invoke(state)
-    assert result["stop_reason"] == "no_new_evidence"
+    assert result["stop_reason"] == "completed"
     assert len(result["step_results"]) == 2
+    assert not result["step_results"][1]["new_evidence"]
     assert result["plan"]["alternative_explanations"] == ["unknown_mechanism"]
 
 
@@ -177,14 +182,16 @@ def test_report_numbers_are_bound_to_archived_json_and_single_study_marked(tmp_p
             key = key.replace("~1", "/").replace("~0", "~")
             value = value[int(key)] if isinstance(value, list) else value[key]
         assert "value" not in binding
-        assert str(value) in result["messages"][-1].content
+        if binding in report["display_quantitative_bindings"]:
+            assert str(value) in result["messages"][-1].content
         assert binding["input_version"] and binding["parameters"] and binding["tool_version"]
     assert all("saved_result_view" not in item for section in report["sections"].values() for item in section)
 
 
 def test_removed_tool_proposal_is_rejected_without_execution(tmp_path):
     model = ProposalModel(responses=[AIMessage(content="", tool_calls=[{
-        "name": "protocol_analysis_agent", "args": {"question": "Protocol A"}, "id": "legacy"}])])
+        "name": "protocol_analysis_agent", "args": {"question": "Protocol A"}, "id": "legacy"}],
+        usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})])
     result = orchestrator.build_orchestrator_graph(model).invoke(inputs(tmp_path))
     assert result["stop_reason"] == "evidence_insufficient:invalid_plan"
     assert result["step_results"] == []

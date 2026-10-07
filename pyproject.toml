@@ -14,6 +14,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+server = [
+  "langgraph-cli[inmem]>=0.3",
+  "python-dotenv[cli]>=1.0",
+]
 h5ad = [
   "anndata>=0.10",
   "scanpy>=1.10",

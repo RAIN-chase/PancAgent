@@ -204,13 +204,15 @@ def _unknown_action(action_id: str) -> ScientificAction:
     raise ValueError(f"Unknown scientific action: {action_id}")
 
 
-def validate_action_arguments(action_id: str, arguments: dict[str, Any]) -> ScientificAction:
+def validate_action_arguments(action_id: str, arguments: dict[str, Any], *, pending_inputs: set[str] | None = None) -> ScientificAction:
     action = get_action(action_id)
     if action.availability != "available":
         raise ValueError(f"Action is not available: {action_id} ({action.availability})")
-    if not isinstance(arguments, dict) or set(arguments) - set(action.inputs):
+    pending = pending_inputs or set()
+    if not isinstance(arguments, dict) or (set(arguments) | pending) - set(action.inputs):
         raise ValueError("Action arguments contain undeclared fields.")
-    if any(arguments.get(key) in (None, "", [], {}) for key in action.required_inputs):
+    arguments = {key: value for key, value in arguments.items() if key not in pending or value not in (None, "", [], {})}
+    if any(arguments.get(key) in (None, "", [], {}) for key in action.required_inputs if key not in pending):
         raise ValueError(f"Required action inputs: {action.required_inputs}")
     for key in ("question", "endpoint", "protocol_id_a", "protocol_id_b"):
         if key in arguments and (not isinstance(arguments[key], str) or not arguments[key].strip()):
@@ -223,7 +225,7 @@ def validate_action_arguments(action_id: str, arguments: dict[str, Any]) -> Scie
             raise ValueError(f"{key} must be a list")
     if "protocol_ids" in arguments and any(not isinstance(value, str) or not value for value in arguments["protocol_ids"]):
         raise ValueError("protocol_ids must contain nonempty strings")
-    if action_id == "protocol.phenotype_compare" and len(set(arguments["protocol_ids"])) < 2:
+    if action_id == "protocol.phenotype_compare" and "protocol_ids" not in pending and len(set(arguments["protocol_ids"])) < 2:
         raise ValueError("Endpoint comparison requires at least two distinct protocols")
     if "edits" in arguments and any(not isinstance(edit, dict) or not edit.get("candidate_feature") for edit in arguments["edits"]):
         raise ValueError("Each edit must identify its candidate_feature")

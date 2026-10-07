@@ -1,4 +1,4 @@
-# Pancreas ProtocolOptimizationAgent
+# PancAgent
 
 ProtocolOptimizationAgent is a downstream multi-agent framework for improving pancreatic / islet organoid differentiation protocols by integrating:
 
@@ -12,11 +12,17 @@ The primary `orchestrator` graph now follows a validated plan, task-specific evi
 
 The [thin Orchestrator refactor](docs/thin_orchestrator_refactor.md) documents domain tool ownership, retired PA-only interfaces and explicitly enabled experimental-feedback APIs.
 
+The [goal-reviewed Orchestrator](docs/orchestrator_goal_review.md) adds scientific question acceptance, source-bound conclusions, explicit result-field dependencies, bounded history retrieval and local failure recovery without adding agents or graph nodes.
+
 Scientific state, Phenotype IR, registered actions, next-experiment selection and researcher feedback commands are documented in [docs/scientific_world_model.md](docs/scientific_world_model.md). PA's future `Protocol_extraction` workflow integration and final intervention IR design are deferred.
 
 Candidate approvals bind evaluation versions; reviewed feedback can enter immutable quantitative datasets. Multi-user identity, project permissions and artifact access require the [authenticated deployment profile](docs/authenticated_deployment.md); the default local profile is not a multi-user security boundary.
 
-Mandatory commit rules are documented in [CONTRIBUTING.md](E:/workspace/Pancreas/Agents_test/CONTRIBUTING.md). Every commit must check code correctness and comment quality before staging.
+Mandatory commit rules are documented in [CONTRIBUTING.md](CONTRIBUTING.md). Every commit must check code correctness and comment quality before staging.
+
+## Linux Deployment
+
+Linux launch commands, server configuration, data transfer and Git-based updates are documented in [docs/linux_deployment.md](docs/linux_deployment.md). Use `bash scripts/start_linux.sh --help` for the available launch modes. Existing PowerShell scripts remain available for Windows development.
 
 ## Repository Layout
 
@@ -348,6 +354,9 @@ protocol_id,dataset_id,h5ad_path,condition_id,sample_id,cell_type_col,batch_col
 ```
 
 ## Design Notes
+
+Conversation summaries, scoped scientific retrieval, source-bound memory writes,
+and explicit recovery/forgetting rules are documented in [Memory Layer](docs/memory_layer.md).
 
 ProtocolOptimizationAgent does not re-parse papers or protocols. It consumes Agent1 artifacts and treats low-confidence or validation-flagged protocol fields as lower-weight evidence.
 

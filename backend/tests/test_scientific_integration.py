@@ -31,19 +31,13 @@ def test_orchestrator_action_compares_protocols_and_persists_state(tmp_path: Pat
     model = ToolModel(
         responses=[
             AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "execute_scientific_action",
-                        "args": {
-                            "action_id": "protocol.compare",
-                            "arguments": {"protocol_id_a": "p1", "protocol_id_b": "p2"},
-                        },
-                        "id": "comparison",
-                    }
-                ],
+                content=json.dumps({"question": "Compare p1 and p2", "steps": [{
+                    "id": "comparison", "action_id": "protocol.compare",
+                    "inputs": {"protocol_id_a": "p1", "protocol_id_b": "p2"},
+                    "expected_outputs": ["feature_diff", "event_step_diff"]}]}),
+                usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
             ),
-            AIMessage(content="Evidence-grounded comparison returned."),
+            AIMessage(content="{}", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
         ]
     )
     result = build_orchestrator_graph(model).invoke(

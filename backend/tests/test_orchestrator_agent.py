@@ -44,16 +44,12 @@ def test_orchestrator_graph_runs_subagent_tool(tmp_path: Path) -> None:
     fake_model = ToolCallingFakeModel(
         responses=[
             AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "execute_scientific_action",
-                        "args": {"action_id": "protocol.lookup", "arguments": {"question": "find Protocol A"}},
-                        "id": "call_protocol_agent",
-                    }
-                ],
+                content=json.dumps({"question": "find Protocol A", "steps": [{
+                    "id": "s1", "action_id": "protocol.lookup", "inputs": {"question": "find Protocol A"},
+                    "expected_outputs": ["protocol_candidates"]}]}),
+                usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
             ),
-            AIMessage(content="已由 Protocol Analysis Agent 完成路由和查询。"),
+            AIMessage(content="{}", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
         ]
     )
 

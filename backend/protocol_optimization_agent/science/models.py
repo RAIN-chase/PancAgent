@@ -73,6 +73,19 @@ class Claim(ScientificRecord):
     caveats: list[str] = Field(default_factory=list)
 
 
+class ScientificInterpretation(ScientificRecord):
+    claim: str = Field(min_length=1)
+    explanation: str
+    classification: Literal["interpretation", "hypothesis"] = "interpretation"
+    status: Literal["UNREVIEWED"] = "UNREVIEWED"
+    source_refs: list[dict[str, Any]] = Field(min_length=1)
+    evidence_for: list[str] = Field(default_factory=list)
+    evidence_against: list[str] = Field(default_factory=list)
+    scope: dict[str, Any] = Field(default_factory=dict)
+    limitations: list[str] = Field(min_length=1)
+    originating_run_id: str
+
+
 class Hypothesis(Claim):
     feature: str
     objective: str

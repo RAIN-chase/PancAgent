@@ -129,7 +129,7 @@ The implemented scientific state upgrade is documented in [scientific_world_mode
 - DA exports deterministic `phenotype_ir.json` and a separate optional `phenotype_interpretation.json`; independent interpretations share one numerical snapshot and disagreements require researcher review.
 - PO exports `next_experiment_candidates.json` through generate, critique, compare, rank and select operators. Utility uses explicit sourced ordinal improvement/information/cost/risk assessments; missing assessments remain unknown.
 - Execution readiness and scientific preconditions are separate. Unknown or mismatched cell line/stage/modality/reference metadata restrict inference and experiment eligibility.
-- Orchestrator exposes `describe_scientific_actions`, `execute_scientific_action` and `inspect_scientific_state`. Registered unavailable actions are not executed.
+- Orchestrator proposes structured plans against Action Registry and executes them through `execute_scientific_action`; `scientific.state` queries persistent records. Registered unavailable actions are not executed.
 - Explicit researcher CLI commands control experiment approval, completion and QC-passed phenotype feedback. Hypotheses become `SUPPORTED`, `REFUTED` or `UNRESOLVED`, retaining contradictory evidence and full revision history.
 - Candidate evaluations are versioned independently of identity; approvals bind an exact evaluation and persisted SQLite records govern exported reports.
 - Hypotheses distinguish concrete baseline, intervention, context and endpoint specifications within a broader research topic; conclusions never transfer merely because the feature name matches.
@@ -141,6 +141,8 @@ The implemented scientific state upgrade is documented in [scientific_world_mode
 ## Planned Orchestrator Execution
 
 The implemented primary chat entrypoint is `orchestrator`, not a single domain agent. Its graph is `configure -> plan -> execute -> review -> execute or finalize (report + archive)`. Code validates Action availability, arguments, dependency ordering, expected results, task validity, repeat evidence and budgets. Partial results are sealed on normal stops and model failures. Saved JSON drives report numbers and the existing UI's plan/progress/stop display. See [planned scientific analysis](planned_scientific_analysis.md) for current limits and examples.
+
+Question acceptance is separate from successful execution: requested objects, endpoints, comparable evidence and unresolved planned subquestions are checked against saved results. Review persists source-bound conclusions and retains historical counterevidence. Structured bindings pass verified result fields between steps; duplicates and failures are local. See [goal-reviewed Orchestrator](orchestrator_goal_review.md) for contracts, scientific limitations and regression scenarios.
 
 ```mermaid
 flowchart TD
@@ -703,6 +705,14 @@ Recommended development organization:
 - Keep domain agents modular and tool-callable.
 - Keep heavy runtime outputs in ignored or external directories: `runs/`, `external_tools/`, `inputs/`, and real `.h5ad` files are not source.
 - Preserve deterministic governance of `protocol_feature_matrix.csv`; LLMs may propose registry candidates or summarize evidence, but deterministic compiler code owns final matrix values.
+
+Memory uses the existing scoped SQLite scientific store. Structured conversation
+summaries are versioned independently of original messages and scientific
+evidence. Retrieval applies explicit scientific fields before keyword relevance
+and expands supporting/opposing evidence. Tool observations and unreviewed
+model interpretations have separate write policies; repetition does not promote
+interpretations to facts. See [Memory Layer](memory_layer.md) for thread recovery,
+context budgeting, authorization and explicit working-memory removal.
 
 Commit discipline:
 

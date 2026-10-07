@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -88,11 +89,10 @@ def test_main_entry_preserves_protocol_comparison_and_evidence(tmp_path: Path) -
             return self
 
     model = ToolCallingFakeModel(responses=[
-        AIMessage(content="", tool_calls=[{
-            "name": "execute_scientific_action",
-            "args": {"action_id": "protocol.compare", "arguments": {"protocol_id_a": "p1", "protocol_id_b": "p2"}},
-            "id": "compare",
-        }], usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
+        AIMessage(content=json.dumps({"question": "Compare Protocol A and Protocol B", "steps": [{
+            "id": "compare", "action_id": "protocol.compare", "inputs": {"protocol_id_a": "p1", "protocol_id_b": "p2"},
+            "expected_outputs": ["feature_diff", "event_step_diff"]
+        }]}), usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
         AIMessage(content="{}", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
     ])
     source = outputs["protocol_feature_matrix"].parent
@@ -103,7 +103,6 @@ def test_main_entry_preserves_protocol_comparison_and_evidence(tmp_path: Path) -
         "optimization_output_dir": str(tmp_path / "missing_po"),
         "workspace_root": str(tmp_path), "max_features": 20,
     })
-    import json
     tool_messages = [message for message in result["messages"] if isinstance(message, ToolMessage)]
     assert [message.name for message in tool_messages] == ["protocol_analysis_agent"]
     actual = json.loads(tool_messages[0].content)

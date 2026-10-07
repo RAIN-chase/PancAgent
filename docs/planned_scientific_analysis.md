@@ -2,6 +2,8 @@
 
 更新日期：2026-10-06。唯一对话入口为 LangGraph 图 `orchestrator`；PA 专用聊天图与聊天 API 已删除。没有新增 Agent，也没有接入尚待确定的 Protocol_extraction workflow 或最终干预 IR。
 
+2026-10-07 更新：新增问题验收、引用结论、历史反证检索和结果字段绑定，详见 [目标验收与复核契约](orchestrator_goal_review.md)。以下旧验收统计是此前版本记录，本轮统计见新文档。
+
 ## 执行与停止
 
 ```text
@@ -13,9 +15,9 @@ configure -> plan -> execute -> review
 
 - 循环只保存 `request`、`plan`、`step_results`、`budget`、`stop_reason`；认证上下文、目录和消息仍为服务基础设施字段。`plan` 保存问题、目标指标、对象、步骤、输入、依赖、预期输出、证据缺口及替代解释。LLM 提议，Pydantic 和 Action Registry 校验；未实现、partial、deferred Action 不能进入可执行计划。
 - `step_results` 保存执行状态、可用性、缺口、结果引用和是否新增证据。依赖步骤必须可用，才执行下游步骤。失败不通过虚构替代数值补齐。
-- `review` 首先由代码检查结果状态、预期输出、任务有效性、重复证据和预算；模型只能返回受限的替代解释、已知结果引用和经过同样校验的新步骤。
+- `review` 首先由代码检查结果状态、问题对象与终点覆盖、可比性、任务有效性、重复证据和预算；模型返回引用绑定的结论、替代解释、澄清问题和经过同样校验的新步骤。
 - 相同 Action、参数、输入版本和工具/源码版本不重复执行。检索的匹配分数变化不算新增科学证据。
-- `stop_reason` 包含 `completed`、`evidence_insufficient` 及细分原因、`no_new_evidence`、`budget_exhausted:<维度>`。正常停止和模型错误都保存部分报告，不以递归超限代替停止条件。历史失败步骤仍会使报告保持部分可用；不自动抹去未验证的缺口。
+- `stop_reason` 包含 `completed`、`evidence_insufficient` 及细分原因、`budget_exhausted:<维度>`。重复步骤复用已有结果，不再全局停止；失败只阻断其依赖步骤。正常停止和模型错误都保存部分报告，不以递归超限代替停止条件。未解决的子问题使报告保持部分可用。
 - 无模型时使用确定性路由和单步计划；跨任务迭代需要已配置的模型，或服务端给出 `request.plan`。本轮测试使用离线模型替身，未验证真实供应商返回计划的稳定性。
 
 服务端可通过 `request={"plan": <以下对象>}` 传入计划；执行后删除请求中的计划副本。生产环境的数据身份和授权路径仍由认证层解析，计划不能声明新的工具或审批权限。
@@ -23,14 +25,14 @@ configure -> plan -> execute -> review
 ```json
 {
   "question": "比较 p1 与 p2 的协议差异",
-  "target_metrics": ["protocol_difference"],
+  "target_metrics": [],
   "objects": ["p1", "p2"],
   "steps": [{
     "id": "compare",
     "action_id": "protocol.compare",
     "inputs": {"protocol_id_a": "p1", "protocol_id_b": "p2"},
     "depends_on": [],
-    "expected_outputs": ["feature_diff", "factor_diff", "stage_diff", "evidence_refs"]
+    "expected_outputs": ["feature_diff", "factor_diff", "stage_diff", "event_step_diff", "evidence_refs"]
   }]
 }
 ```
@@ -131,7 +133,7 @@ pnpm exec tsc --noEmit
 
 例如 `from protocol_optimization_agent.runtime import RunContext` 改为 `from protocol_optimization_agent.runtime.context import RunContext`；批处理类从 `agents.pipeline` 导入，聊天图从 `agents.orchestrator` 导入。CLI 命令名与 `orchestrator` 图 ID 保持不变。`protocol_chat` 图与 `/protocol-query/chat` 已删除；实验审批与反馈 API 默认关闭，显式启用后保留原路由。旧 `python -m protocol_optimization_agent.cli` 不再支持，应使用命令 `protocol-optimization-agent` 或规范模块 `interfaces.cli`。
 
-仅向模型绑定 `execute_scientific_action`；能力描述与离线路由来自 Action Registry。旧直接工具提议、`describe_subagents` 与重复工具列表已删除。PA/DA/PO 仅执行各自领域任务，固定计算图不包含自主规划回路；PO 不再接受原始 PA/DA 输入，也不在内部触发上游 Agent。缺少协议提取工作流时明确停止，不把协议评估当作协议编译替代品。
+模型仅输出结构化计划和复核 JSON，不再接受 tool-call 格式的计划提议；服务端通过 `execute_scientific_action` 执行。能力描述与离线路由来自 Action Registry。旧直接工具提议、`describe_subagents` 与重复工具列表已删除。PA/DA/PO 仅执行各自领域任务，固定计算图不包含自主规划回路；PO 不再接受原始 PA/DA 输入，也不在内部触发上游 Agent。缺少协议提取工作流时明确停止，不把协议评估当作协议编译替代品。
 
 工具结果统一使用 `orchestrator-evidence-envelope-v2`，删除重复的 `result` 与 PO 顶层数值别名；数据位于 `result_preview`，有效性位于 `validation`。调度器保存结果后为返回消息添加 `result_refs`，不在文件内声明自身 SHA256。
 

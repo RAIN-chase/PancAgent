@@ -19,6 +19,7 @@ inputs/Gene_Programs/*
 *.h5ad
 external_tools/
 configs/auth.local.json
+configs/*.local.json
 *.tsbuildinfo
 build/
 dist/

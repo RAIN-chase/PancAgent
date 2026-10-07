@@ -20,6 +20,7 @@ from protocol_optimization_agent.science.models import (
     Hypothesis,
     PhenotypeState,
     ProtocolState,
+    ScientificInterpretation,
     ScientificRecord,
 )
 
@@ -33,6 +34,7 @@ RECORD_TYPES = {
     "feedback_admission": FeedbackAdmission,
     "analysis_dataset": AnalysisDataset,
     "analysis_result": AnalysisResult,
+    "interpretation": ScientificInterpretation,
 }
 SCIENTIFIC_STAGES = {
     "S0": "Evidence ingestion",
@@ -88,6 +90,8 @@ class ScientificWorldModel:
             known = {(kind, record_id) for kind, record_id in db.execute("SELECT kind,id FROM records")}
             known.update((self._kind(record), record.id) for record in records)
             for record in records:
+                if isinstance(record, ScientificInterpretation):
+                    record = ScientificInterpretation.model_validate(record.model_dump())
                 kind = self._kind(record)
                 if isinstance(record, Claim) and (record.status != "UNRESOLVED" or record.evidence_against):
                     raise ValueError("Belief updates must use reviewed experiment feedback.")
@@ -126,7 +130,7 @@ class ScientificWorldModel:
                         record = record.model_copy(update={"opposing_evidence_refs": list(opposing.values())})
                 if kind == "feedback_admission":
                     raise ValueError("Feedback admission requires a researcher command.")
-                if kind == "experiment":
+                if isinstance(record, ExperimentCandidate):
                     if previous and previous["status"] != "PROPOSED":
                         continue
                     if previous and (previous["hypothesis_ids"] != record.hypothesis_ids):
@@ -213,24 +217,41 @@ class ScientificWorldModel:
             admissions = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records WHERE kind='feedback_admission' ORDER BY id")]
         return stable_id("feedback", {"experiments": [row for row in payloads if row["status"] != "PROPOSED"], "admissions": admissions})
 
-    def reasoning_context(self) -> dict[str, Any]:
+    def reasoning_context(self, question: str | None = None, limit: int = 8, *, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not 1 <= limit <= 20:
+            raise ValueError("Planning history limit must be between 1 and 20.")
         with self._connect() as db:
-            hypotheses = [
-                json.loads(row[0])
-                for row in db.execute("SELECT payload FROM records WHERE kind='hypothesis' ORDER BY id")
-            ]
+            phrases = re.findall(r"\bprotocol\s+[A-Za-z0-9_.-]+\b", question or "", re.I)
+            terms = list(dict.fromkeys(term.lower() for term in [*phrases,
+                *re.findall(r"[A-Za-z][A-Za-z0-9_.-]{1,63}|[\u4e00-\u9fff]{2,16}", question or "")]
+                if term.lower() not in {"protocol", "protocols", "compare", "the", "and", "which", "better", "expression", "find"}))[:12]
+            parameters = ["%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for term in terms]
+            if question is not None or filters:
+                from protocol_optimization_agent.science.memory import retrieve_records
+                hypotheses = retrieve_records(db, "hypothesis", question or "", filters or {}, limit)
+                interpretations = retrieve_records(db, "interpretation", question or "", filters or {}, limit)
+            else:
+                hypotheses = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records WHERE kind='hypothesis' ORDER BY id")]
+                interpretations = []
             admissions = [json.loads(row[0]) for row in db.execute(
-                "SELECT payload FROM records WHERE kind='feedback_admission' ORDER BY id"
+                "SELECT payload FROM records WHERE kind='feedback_admission'" + (" AND 0" if question is not None else "") + " ORDER BY id"
             )]
-            previous = db.execute("SELECT payload FROM history WHERE kind='analysis_result' ORDER BY seq DESC LIMIT 1").fetchone()
+            previous_clause = " AND (" + " OR ".join("lower(json_extract(payload, '$.record.objective')) LIKE ? ESCAPE '\\'" for _ in terms) + ")" if terms else " AND 0"
+            previous = db.execute("SELECT payload FROM history WHERE kind='analysis_result'" +
+                (previous_clause if question is not None else "") + " ORDER BY seq DESC LIMIT 1",
+                parameters if question is not None else []).fetchone()
         return {
             "hypotheses": [
-                {key: h.get(key) for key in ("id", "topic_id", "test_spec", "status", "evidence_for", "evidence_against", "tested_experiment_ids", "opposing_evidence_refs")}
+                {key: h.get(key) for key in ("id", "version", "feature", "statement", "objective", "protocol_ids", "topic_id", "test_spec", "status", "evidence_for", "evidence_against", "tested_experiment_ids", "supporting_evidence_refs", "opposing_evidence_refs", "supporting_evidence", "opposing_evidence", "supporting_missing_evidence_ids", "opposing_missing_evidence_ids")}
                 for h in hypotheses
             ],
+            "interpretations": interpretations,
             "feedback_fingerprint": self.feedback_fingerprint(),
             "admitted_feedback": admissions,
-            "previous_analysis_result": json.loads(previous[0])["record"] if previous else None,
+            "previous_analysis_result": ({key: json.loads(previous[0])["record"].get(key) for key in ("id", "version", "objective", "analysis_dataset_id")}
+                if question is not None and previous else json.loads(previous[0])["record"] if previous else None),
+            "retrieval_scope": {"question": question, "limit": limit, "filters": filters or {}, "terms": terms,
+                "policy": "structured conditions first; lexical and explicit synonyms second; no transfer across mismatched contexts"} if question is not None or filters else {},
         }
 
     def history(self, kind: str, record_id: str) -> list[dict[str, Any]]:
@@ -286,6 +307,8 @@ class ScientificWorldModel:
             return record.evidence_ids
         if isinstance(record, Claim):
             return [*record.evidence_for, *record.evidence_against, *getattr(record, "rationale_evidence", [])]
+        if isinstance(record, ScientificInterpretation):
+            return [*record.evidence_for, *record.evidence_against]
         return []
 
     @staticmethod
@@ -313,7 +336,7 @@ class ScientificWorldModel:
             old = {key: value for key, value in previous.items() if key != "version"}
             if old == payload:
                 return
-            if kind in {"evidence", "analysis_dataset", "analysis_result", "feedback_admission"}:
+            if kind in {"evidence", "interpretation", "analysis_dataset", "analysis_result", "feedback_admission"}:
                 raise ValueError("Evidence/dataset/admission is immutable; register a new id for revised observations.")
         payload["version"] = previous["version"] + 1 if previous else 1
         encoded = json.dumps(payload, sort_keys=True, allow_nan=False)

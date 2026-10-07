@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Literal
 
@@ -10,6 +11,34 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from protocol_optimization_agent.agents.actions import get_action, validate_action_arguments
 from protocol_optimization_agent.runtime.context import content_fingerprint
+from protocol_optimization_agent.science.reporting import pointer_value, saved_result
+
+GoalType = Literal["lookup", "protocol_comparison", "endpoint_analysis", "endpoint_comparison", "hypothesis", "quality", "state"]
+
+
+def question_goal(question: str) -> str:
+    if re.search(r"哪个.*(?:好|优)|哪种.*更好|更好|优劣|which.*(?:better|superior)|best protocol", question, re.I):
+        return "endpoint_comparison"
+    from protocol_optimization_agent.agents.actions import select_action
+    action = select_action(question)
+    if action.agent == "PO":
+        return "hypothesis"
+    if action.id.startswith("phenotype."):
+        return "endpoint_analysis"
+    if action.id == "scientific.state":
+        return "state"
+    if action.id == "data.assess":
+        return "quality"
+    if re.search(r"比较|对比|区别|差异|compare|difference", question, re.I):
+        return "protocol_comparison"
+    return "lookup"
+
+
+class InputBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_step: str
+    field_path: str = Field(pattern=r"^(/.*)?$")
+    input_path: str = Field(pattern=r"^/[^/]+(/.*)?$")
 
 
 class PlanStep(BaseModel):
@@ -19,10 +48,18 @@ class PlanStep(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
     expected_outputs: list[str] = Field(min_length=1)
+    input_bindings: list[InputBinding] = Field(default_factory=list, max_length=12)
 
     @model_validator(mode="after")
     def registered_action(self) -> PlanStep:
-        action = validate_action_arguments(self.action_id, self.inputs)
+        action = get_action(self.action_id)
+        pending = {binding.input_path.split("/")[1] for binding in self.input_bindings}
+        missing = {key for key in action.required_inputs if self.inputs.get(key) in (None, "", [], {})}
+        action = validate_action_arguments(self.action_id, self.inputs, pending_inputs=pending | missing)
+        paths = [binding.input_path for binding in self.input_bindings]
+        if any(a == b or a.startswith(b + "/") or b.startswith(a + "/") for i, a in enumerate(paths) for b in paths[i + 1:]):
+            raise ValueError("Input binding targets overlap")
+        self.depends_on = list(dict.fromkeys([*self.depends_on, *[binding.source_step for binding in self.input_bindings]]))
         if not set(self.expected_outputs).issubset(action.outputs):
             raise ValueError(f"Undeclared action outputs: {self.action_id}")
         return self
@@ -33,6 +70,11 @@ class AnalysisPlan(BaseModel):
     question: str = Field(min_length=1)
     target_metrics: list[str] = Field(default_factory=list)
     objects: list[str] = Field(default_factory=list)
+    goal_type: GoalType = "lookup"
+    acceptance: dict[str, Any] = Field(default_factory=dict)
+    conclusions: list[dict[str, Any]] = Field(default_factory=list)
+    conclusion_refs: list[str] = Field(default_factory=list)
+    clarification_questions: list[str] = Field(default_factory=list)
     evidence_gaps: list[str] = Field(default_factory=list)
     alternative_explanations: list[str] = Field(default_factory=list)
     steps: list[PlanStep] = Field(min_length=1, max_length=12)
@@ -44,6 +86,31 @@ class AnalysisPlan(BaseModel):
             if step.id in seen or not set(step.depends_on).issubset(seen):
                 raise ValueError("Steps must have unique ids and topologically ordered dependencies")
             seen.add(step.id)
+        return self
+
+
+class EvidenceCitation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_type: Literal["result", "history"] = "result"
+    source_id: str
+    field_path: str = Field(default="", pattern=r"^(/.*)?$")
+
+
+class ScientificConclusion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    claim: str = Field(min_length=1, max_length=1500)
+    explanation: str = Field(min_length=1, max_length=3000)
+    evidence_level: Literal["fact", "descriptive", "exploratory", "hypothesis", "undetermined"]
+    supporting_refs: list[EvidenceCitation] = Field(default_factory=list, max_length=12)
+    opposing_refs: list[EvidenceCitation] = Field(default_factory=list, max_length=12)
+    limitations: list[str] = Field(min_length=1, max_length=12)
+    objects: list[str] = Field(default_factory=list)
+    metrics: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def no_model_measurements(self) -> ScientificConclusion:
+        if re.search(r"(?<![\w])[-+]?\d+(?:\.\d+)?(?:%|\b)", " ".join([self.claim, self.explanation, *self.limitations])):
+            raise ValueError("Quantitative statements must use saved result references, not model-authored numbers")
         return self
 
 
@@ -62,6 +129,34 @@ class ReviewProposal(BaseModel):
     ] = Field(default_factory=list)
     next_steps: list[PlanStep] = Field(default_factory=list, max_length=4)
     conclusion_refs: list[str] = Field(default_factory=list)
+    conclusions: list[ScientificConclusion] = Field(default_factory=list, max_length=8)
+    clarification_questions: list[str] = Field(default_factory=list, max_length=8)
+
+
+def resolve_step_inputs(step: dict[str, Any], records: list[dict[str, Any]], root) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    inputs = json.loads(json.dumps(step["inputs"]))
+    by_id = {record["step_id"]: record for record in records}
+    provenance = []
+    for binding in step.get("input_bindings", []):
+        source = by_id[binding["source_step"]]
+        if not source.get("usable") or not source.get("result_ref"):
+            raise ValueError("Input binding source is not usable")
+        ref = source["result_ref"]
+        value = pointer_value(saved_result(ref, root), binding["field_path"])
+        parts = binding["input_path"].split("/")[1:]
+        if any("~" in part for part in parts):
+            raise ValueError("Input binding targets must use declared input field names")
+        target = inputs
+        for part in parts[:-1]:
+            target = target.setdefault(part, {})
+            if not isinstance(target, dict):
+                raise ValueError("Input binding target is not an object")
+        if parts[-1] in target and target[parts[-1]] not in (None, "", [], {}):
+            raise ValueError("Input binding cannot override explicit scientific parameters")
+        target[parts[-1]] = value
+        provenance.append({**binding, "result_ref": {**ref, "field_path": binding["field_path"]}})
+    validate_action_arguments(step["action_id"], inputs)
+    return inputs, provenance
 
 
 def initialize_budget(request: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +166,7 @@ def initialize_budget(request: dict[str, Any]) -> dict[str, Any]:
         "max_model_calls": 12,
         "max_seconds": 900,
         "max_model_tokens": 32000,
+        "max_context_chars": 128000,
     }
     defaults = {
         "max_tool_calls": 6,
@@ -78,6 +174,7 @@ def initialize_budget(request: dict[str, Any]) -> dict[str, Any]:
         "max_model_calls": 6,
         "max_seconds": 300,
         "max_model_tokens": 16000,
+        "max_context_chars": 64000,
     }
     result = {}
     for name, hard_limit in limits.items():
@@ -94,6 +191,7 @@ def initialize_budget(request: dict[str, Any]) -> dict[str, Any]:
         **result,
         "max_model_cost": cost,
         "model_calls": 0,
+        "format_repairs": 0,
         "model_tokens": 0,
         "model_cost": 0.0,
         "started_at": time.time(),

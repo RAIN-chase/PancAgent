@@ -244,7 +244,8 @@ class ToolModel(FakeMessagesListChatModel):
 
 
 def test_graph_rerun_creates_child_and_archives_actual_model_response(tmp_path: Path) -> None:
-    model = ToolModel(responses=[AIMessage(content="First answer"), AIMessage(content="Second answer")])
+    model = ToolModel(responses=[AIMessage(content="First answer", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
+                                AIMessage(content="Second answer", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})])
     graph = build_orchestrator_graph(model)
     result = graph.invoke(_graph_input(tmp_path, "first"), {"configurable": {"thread_id": "conversation"}})
     first_root = tmp_path / "users" / "local_user" / "runs" / "first"
