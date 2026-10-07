@@ -9,10 +9,10 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from protocol_optimization_agent.agents.actions import action_registry
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
 from protocol_optimization_agent.agents.orchestrator import (
-    _optimization_cache_key,
     build_orchestrator_graph,
     execute_scientific_action,
 )
+from protocol_optimization_agent.agents.protocol_optimizing import _optimization_cache_key
 from protocol_optimization_agent.runtime.context import RunContext
 from protocol_optimization_agent.science.models import DecisionAssessment, ExperimentCandidate, Hypothesis
 from protocol_optimization_agent.science.state import ScientificWorldModel

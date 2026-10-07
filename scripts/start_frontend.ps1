@@ -2,7 +2,7 @@ param(
   [string]$HostAddress = "0.0.0.0",
   [int]$Port = 5173,
   [string]$LangGraphApiUrl = "",
-  [string]$AssistantId = "orchestrator",
+  [ValidateSet("orchestrator")][string]$AssistantId = "orchestrator",
   [string]$AllowedDevOrigins = "10.203.168.222,172.20.128.1"
 )
 

@@ -9,6 +9,7 @@ from protocol_optimization_agent.agents.protocol_optimizing import ProtocolOptim
 from protocol_optimization_agent.analysis.phenotype.representation import METRIC_COLUMNS, build_phenotype_ir
 from protocol_optimization_agent.runtime.context import RunContext
 from protocol_optimization_agent.runtime.io import read_csv_dicts
+from protocol_optimization_agent.science.identity import stable_id
 from protocol_optimization_agent.science.ingestion import (
     ingest_experiment_proposals,
     ingest_phenotype_outputs,
@@ -120,7 +121,11 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
             sample = json.loads(json.dumps(p))
             sample["id"] += f"_{repeat}"
             sample["sample_id"] = f"{p['protocol_id']}_sample{repeat}"
-            sample["metadata"] = {**metadata, "biological_replicate_id": f"r{repeat}"}
+            protocol_row = next(row for row in read_csv_dicts(protocol_dir / "protocol_feature_matrix.csv")
+                                if row["protocol_id"] == p["protocol_id"])
+            sample["metadata"] = {**metadata, "biological_replicate_id": f"r{repeat}",
+                                  "study_id": protocol_row["paper_id"],
+                                  "protocol_snapshot_id": stable_id("protocol_snapshot", protocol_row)}
             for metric in sample["metrics"]:
                 metric["id"] += f"_{repeat}"
                 metric["unit"] = "score"
@@ -142,7 +147,10 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
         "protocol_phenotype_summary",
         "protocol_phenotype_associations",
         "optimization_candidate_features",
-        "counterfactual_protocol_predictions",
+        "similar_protocol_reference",
+        "joint_evidence",
+        "endpoint_associations",
+        "mechanism_evidence",
         "proposed_improved_protocol_md",
         "proposed_improved_protocol_json",
         "factor_recommendation_table",
@@ -157,7 +165,8 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
     associations = list(csv.DictReader(outputs["protocol_phenotype_associations"].open(encoding="utf-8")))
     assert associations
     assert associations[0]["causal_interpretation"] == "association_only"
-    assert associations[0]["target_endpoint"] == "objective_weighted_score"
+    assert associations[0]["analysis_role"] == "primary_raw_endpoint"
+    assert {row["target_endpoint"] for row in associations} >= {"beta", "stress", "similarity_scores", "objective_weighted_score"}
 
     summaries = list(csv.DictReader(outputs["protocol_phenotype_summary"].open(encoding="utf-8")))
     assert "objective_weighted_score" in summaries[0]
@@ -182,9 +191,10 @@ def test_protocol_optimizing_agent_exports_hypothesis_framework_outputs(tmp_path
     assert experiments["scientific_preconditions"]["scientific_ready"] is True
     assert experiments["hypotheses"][0]["status"] == "UNRESOLVED"
 
-    prediction = json.loads(outputs["counterfactual_protocol_predictions"].read_text(encoding="utf-8"))
+    prediction = json.loads(outputs["similar_protocol_reference"].read_text(encoding="utf-8"))
     assert prediction["status"] == "similar_protocol_reference_scored"
-    assert prediction["prediction_policy"] == "similar-protocol reference only; not a causal or supervised prediction model"
+    assert prediction["reference_policy"] == "similar-protocol reference only; not a causal or supervised prediction model"
+    assert prediction["candidate_outcome_estimate"] is None
     assert prediction["feature_coverage"]["mean"] == pytest.approx(1.0)
     assert prediction["out_of_distribution"]["status"] == "in_distribution"
     assert prediction["nearest_protocols"]

@@ -9,8 +9,8 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
-from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
-from protocol_optimization_agent.agents.orchestrator import build_orchestrator_graph, data_analysis_agent
+from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent, data_analysis_agent
+from protocol_optimization_agent.agents.orchestrator import build_orchestrator_graph
 from protocol_optimization_agent.analysis.protocol.query_engine import ProtocolQueryEngine
 from protocol_optimization_agent.runtime.archive import RunArchive, audited_operation, fingerprint, redact
 from protocol_optimization_agent.runtime.context import RunContext, content_fingerprint, write_run_manifest
@@ -281,7 +281,7 @@ def test_model_failure_seals_partial_report_and_retains_error(tmp_path: Path) ->
 
 
 def test_standalone_agent_runs_and_tool_cache_reads_have_separate_archives(tmp_path: Path) -> None:
-    agent = DataAnalysisAgent(tmp_path, h5ad_config={"query_genes": ["INS"]})
+    agent = DataAnalysisAgent(tmp_path, h5ad_config={"requested_tasks": ["gene_expression"], "query_genes": ["INS"]})
     first = agent.run([])
     second = agent.run([])
     assert first["gene_expression_summary"].parent != second["gene_expression_summary"].parent

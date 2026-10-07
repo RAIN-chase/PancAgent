@@ -50,6 +50,10 @@ class RunContext:
             project_id=project_id,
         )
 
+    def tool_inputs(self) -> dict[str, str]:
+        return {"user_id": self.user_id, "run_id": self.run_id, "trace_id": self.trace_id,
+                "workspace_root": str(self.workspace_root), "project_id": self.project_id}
+
     def user_root(self) -> Path:
         return self.workspace_root / "users" / self.user_id
 
@@ -228,3 +232,20 @@ def _timestamp_id() -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def resolve_domain_output_dir(agent_id: str, value: str | None, context: RunContext) -> str:
+    env_var, default = {
+        "protocol_analysis": ("PROTOCOL_ANALYSIS_OUTPUT_DIR", "runs/protocol_analysis_agent_simplified_autofeatures"),
+        "data_analysis": ("DATA_ANALYSIS_OUTPUT_DIR", "runs/data_analysis"),
+        "protocol_optimization": ("PROTOCOL_OPTIMIZATION_OUTPUT_DIR", "runs/protocol_optimization"),
+    }[agent_id]
+    return resolve_agent_output_dir(agent_id, value, env_var, default, context)
+
+
+def record_agent_call(context: RunContext, *, subagent: str, operation: str, status: str,
+                      question: str, output_files: dict[str, str], output_dirs: dict[str, str],
+                      inputs: dict[str, str], extra: dict[str, Any]) -> None:
+    append_tool_call_log(context, subagent=subagent, operation=operation, status=status,
+                         question=question, output_files=output_files)
+    write_run_manifest(context, output_dirs=output_dirs, inputs=inputs, extra=extra)

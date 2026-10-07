@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
+from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
+
+from protocol_optimization_agent.analysis.optimization.comparability import scientific_preconditions
 from protocol_optimization_agent.analysis.protocol._shared import (
     DEFAULT_ALLOWED_EVENT_STATUSES,
     KEY_FACTOR_TYPES_REQUIRING_EVIDENCE,
@@ -15,6 +19,7 @@ from protocol_optimization_agent.analysis.protocol._shared import (
     _protocol_confidence_score,
     _validation_flag_names,
 )
+from protocol_optimization_agent.analysis.protocol.assessment import assess_protocols
 from protocol_optimization_agent.analysis.protocol.audit import audit_protocol_analysis_outputs
 from protocol_optimization_agent.analysis.protocol.comparison import (
     _build_protocol_difference_report,
@@ -33,7 +38,9 @@ from protocol_optimization_agent.analysis.protocol.graph_builder import (
     _build_standardized_protocol_representations,
 )
 from protocol_optimization_agent.analysis.protocol.normalization import normalize_factor_events
+from protocol_optimization_agent.analysis.protocol.query_engine import ProtocolQueryEngine
 from protocol_optimization_agent.analysis.protocol.semantic_annotation import annotate_protocol_semantics
+from protocol_optimization_agent.analysis.protocol.step_semantics import annotate_steps
 from protocol_optimization_agent.analysis.protocol.validation import (
     _build_field_quantification_map,
     _build_lossless_protocol_representation_audit,
@@ -42,9 +49,18 @@ from protocol_optimization_agent.analysis.protocol.validation import (
     _build_source_identity_report,
     _validate_analysis_inputs,
 )
-from protocol_optimization_agent.runtime.archive import audited_agent_run, audited_operation
+from protocol_optimization_agent.runtime.access_control import forbid_client_paths
+from protocol_optimization_agent.runtime.archive import audited_agent_run, audited_operation, audited_tool
+from protocol_optimization_agent.runtime.context import (
+    RunContext,
+    evidence_response_envelope,
+    record_agent_call,
+    resolve_domain_output_dir,
+)
 from protocol_optimization_agent.runtime.io import write_csv_dicts, write_json, write_jsonl
 from protocol_optimization_agent.runtime.llm_client import LLMClient, OfflineLLMClient
+from protocol_optimization_agent.science.ingestion import ingest_protocol_outputs, record_comparison_claim
+from protocol_optimization_agent.science.state import ScientificWorldModel
 
 
 class ProtocolAnalysisState(TypedDict, total=False):
@@ -63,6 +79,8 @@ class ProtocolAnalysisState(TypedDict, total=False):
     semantic_annotations: list[dict[str, Any]]
     strategy_summary: dict[str, Any]
     semantic_report: dict[str, Any]
+    step_annotations: list[dict[str, Any]]
+    step_semantic_audit: dict[str, Any]
     analysis_events: list[dict[str, Any]]
     stage_rows: list[dict[str, Any]]
     factor_report: dict[str, Any]
@@ -229,11 +247,18 @@ class ProtocolAnalysisAgent:
             llm_client=self.llm_client,
             max_llm_stages=int(self.quality_filters.get("max_llm_semantic_stages", 0)),
         )
+        step_annotations, step_semantic_audit = annotate_steps(
+            state.get("protocol_records", []), state.get("accepted_protocol_ids", set()),
+            llm_client=self.llm_client,
+            max_llm_steps=int(self.quality_filters.get("max_llm_step_semantics", 0)),
+        )
         return {
             **state,
             "semantic_annotations": semantic_annotations,
             "strategy_summary": strategy_summary,
             "semantic_report": semantic_report,
+            "step_annotations": step_annotations,
+            "step_semantic_audit": step_semantic_audit,
             "step_log": _append_step(state, "protocol_semantic_interpreter"),
         }
 
@@ -408,6 +433,7 @@ class ProtocolAnalysisAgent:
         )
         llm_audit_report["normalization_report"] = state.get("normalization_report", {})
         llm_audit_report["semantic_report"] = state.get("semantic_report", {})
+        llm_audit_report["step_semantic_audit"] = state.get("step_semantic_audit", {})
         return {
             **state,
             "llm_audit_report": llm_audit_report,
@@ -436,6 +462,8 @@ class ProtocolAnalysisAgent:
         write_csv_dicts(outputs["filtered_protocol_factor_events"], state.get("filtered_events", []))
         write_jsonl(outputs["normalized_factor_events"], state.get("normalized_events", []))
         write_jsonl(outputs["semantic_stage_annotations"], state.get("semantic_annotations", []))
+        write_jsonl(outputs["semantic_step_annotations"], state.get("step_annotations", []))
+        write_json(outputs["step_semantic_audit"], state.get("step_semantic_audit", {}))
         write_json(outputs["protocol_strategy_summary"], state.get("strategy_summary", {}))
         write_json(outputs["llm_audit_report"], state.get("llm_audit_report", {}))
         write_jsonl(outputs["standardized_protocol_representations"], state.get("standardized_protocols", []))
@@ -488,6 +516,8 @@ class ProtocolAnalysisAgent:
             "filtered_protocol_factor_events": self.output_dir / "filtered_protocol_factor_events.csv",
             "normalized_factor_events": self.output_dir / "normalized_factor_events.jsonl",
             "semantic_stage_annotations": self.output_dir / "semantic_stage_annotations.jsonl",
+            "semantic_step_annotations": self.output_dir / "semantic_step_annotations.jsonl",
+            "step_semantic_audit": self.output_dir / "step_semantic_audit.json",
             "protocol_strategy_summary": self.output_dir / "protocol_strategy_summary.json",
             "llm_audit_report": self.output_dir / "llm_audit_report.json",
             "standardized_protocol_representations": self.output_dir / "standardized_protocol_representations.jsonl",
@@ -607,3 +637,173 @@ def _append_step(state: ProtocolAnalysisState, node_name: str) -> list[dict[str,
     log = list(state.get("step_log", []))
     log.append({"node": node_name, "status": "completed"})
     return log
+
+
+@tool
+@audited_tool
+def protocol_analysis_agent(
+    question: str,
+    protocol_output_dir: Annotated[str, InjectedState("protocol_output_dir")],
+    max_features: Annotated[int, InjectedState("max_features")],
+    request: dict[str, Any] | None = None,
+    user_id: Annotated[str, InjectedState("user_id")] = "",
+    run_id: Annotated[str, InjectedState("run_id")] = "",
+    trace_id: Annotated[str, InjectedState("trace_id")] = "",
+    workspace_root: Annotated[str, InjectedState("workspace_root")] = "",
+    project_id: Annotated[str, InjectedState("project_id")] = "default",
+) -> dict[str, Any]:
+    """Delegate protocol lookup, comparison, matrix, event, evidence, or visualization questions to Protocol Analysis Agent."""
+
+    context = RunContext.from_values(user_id=user_id, run_id=run_id, trace_id=trace_id, workspace_root=workspace_root, project_id=project_id)
+    forbid_client_paths(request or {})
+    output_dir = resolve_domain_output_dir("protocol_analysis", protocol_output_dir, context)
+    engine = ProtocolQueryEngine(Path(output_dir))
+    if request and request.get("protocol_id_a") and request.get("protocol_id_b"):
+        comparison = engine.compare_protocols(str(request["protocol_id_a"]), str(request["protocol_id_b"]), max_features)
+        result = {"status": comparison.get("status", "not_found"), "intent": "compare_protocols", "tool_result": comparison}
+    else:
+        result = engine.answer_question(question, max_features=max_features)
+    store = ScientificWorldModel(context, project_id)
+    comparison = result.get("tool_result", {})
+    protocol_ids = {str(comparison.get(key, {}).get("protocol_id") or "") for key in ("protocol_a", "protocol_b")} - {""}
+    protocol_rows = [row for protocol_id in sorted(protocol_ids) for row in engine.query_matrix(filters={"protocol_id": protocol_id})]
+    preconditions = scientific_preconditions(protocol_rows, [], purpose="descriptive_comparison") if protocol_ids else {}
+    world_update = ingest_protocol_outputs(store, Path(output_dir), protocol_ids or None)
+    record_comparison_claim(store, result, preconditions)
+    selected_operation = str(result.get("intent") or "protocol_query")
+    output_files = {
+        "protocol_feature_matrix": str(Path(output_dir) / "protocol_feature_matrix.csv"),
+        "normalized_events": str(Path(output_dir) / "normalized_factor_events.jsonl"),
+        "feature_provenance": str(Path(output_dir) / "protocol_feature_provenance.json"),
+        "step_annotations": str(Path(output_dir) / "semantic_step_annotations.jsonl"),
+        "step_semantic_audit": str(Path(output_dir) / "step_semantic_audit.json"),
+    }
+    record_agent_call(
+        context,
+        subagent="protocol_analysis_agent",
+        operation=selected_operation,
+        status=str(result.get("status", "ok")),
+        question=question,
+        output_files=output_files,
+        output_dirs={"protocol_analysis": output_dir},
+        inputs={"protocol_analysis_output_dir": output_dir},
+        extra={"entrypoint": "orchestrator", "last_subagent": "protocol_analysis_agent"},
+    )
+    return evidence_response_envelope(
+        context=context,
+        subagent="protocol_analysis_agent",
+        status=str(result.get("status", "ok")),
+        question=question,
+        selected_operation=selected_operation,
+        used_tools=_protocol_used_tools(result),
+        used_features=_protocol_used_features(result),
+        evidence_refs=_protocol_evidence_refs(result),
+        confidence_caveats=[*_protocol_confidence_caveats(result), *(
+            ["This is a descriptive comparison. Metadata are insufficient for causal or matched-phenotype inference."]
+            if preconditions and not preconditions.get("scientific_ready") else []
+        )],
+        result_preview=result,
+        output_files=output_files,
+        provenance={"output_dir": output_dir},
+        validation={"scientific_preconditions": preconditions},
+        extra={"output_dir": output_dir, "scientific_preconditions": preconditions,
+               "scientific_state": world_update},
+    )
+
+
+def _protocol_used_tools(result: dict[str, Any]) -> list[str]:
+    intent = str(result.get("intent") or "")
+    if intent == "compare_protocols":
+        return ["find_protocols", "compare_protocols"]
+    if intent:
+        return [intent]
+    return ["ProtocolQueryEngine.answer_question"]
+
+
+def _protocol_used_features(result: dict[str, Any]) -> list[str]:
+    tool_result = result.get("tool_result", {})
+    differences = tool_result.get("feature_differences", []) if isinstance(tool_result, dict) else []
+    return [str(row.get("feature") or "") for row in differences[:50] if row.get("feature")]
+
+
+def _protocol_evidence_refs(result: dict[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = [{"protocol_id": row.get("protocol_id"), "paper_id": row.get("paper_id"),
+                                  "evidence_type": "protocol_lookup"} for row in result.get("results", [])]
+    tool_result = result.get("tool_result", {})
+    if not isinstance(tool_result, dict):
+        return refs
+    for side in ("protocol_a", "protocol_b"):
+        summary = tool_result.get(side, {})
+        if isinstance(summary, dict):
+            metadata = summary.get("metadata", {})
+            refs.append(
+                {
+                    "source": side,
+                    "protocol_id": summary.get("protocol_id") or metadata.get("protocol_id", ""),
+                    "paper_id": metadata.get("paper_id", ""),
+                    "evidence_type": "protocol_summary",
+                }
+            )
+    for event_group in ("protocol_a_representative_events", "protocol_b_representative_events"):
+        for event in tool_result.get("factor_diff", {}).get(event_group, [])[:20]:
+            refs.append(
+                {
+                    "source": event_group,
+                    "factor_type": event.get("factor_type", ""),
+                    "normalized_family": event.get("normalized_family", ""),
+                    "evidence_quote": event.get("evidence_quote", ""),
+                }
+            )
+    refs.extend(tool_result.get("event_step_diff", {}).get("source_refs", []))
+    for key in ("protocol_a_annotations", "protocol_b_annotations"):
+        for annotation in tool_result.get("event_step_diff", {}).get("semantic_alignment", {}).get(key, []):
+            refs.append({"protocol_id": annotation["protocol_id"], "step_id": annotation["step_id"],
+                         "source_ref": annotation["source_ref"], "source_text": annotation["source_text"],
+                         "evidence_quote": annotation["evidence_quote"], "evidence_type": "step_annotation"})
+    return refs
+
+
+def _protocol_confidence_caveats(result: dict[str, Any]) -> list[str]:
+    caveats: list[str] = []
+    if result.get("status") != "ok":
+        caveats.append(f"Protocol Analysis Agent returned status={result.get('status')}.")
+    tool_result = result.get("tool_result", {})
+    if isinstance(tool_result, dict) and tool_result.get("audit_warnings"):
+        caveats.append("Protocol-level audit warnings are available and should be considered.")
+    if not _protocol_evidence_refs(result):
+        caveats.append("No detailed evidence references were returned for this query path.")
+    if isinstance(tool_result, dict) and "event_step_diff" in tool_result:
+        caveats.append("Semantic step alignment is not proof of experimental equivalence; inspect source support, conditions and unknown targets.")
+    return caveats
+
+
+
+def execute_protocol_action(action, arguments: dict[str, Any], context: RunContext,
+                            output_dir: str, max_features: int) -> dict[str, Any]:
+    if action.id == "protocol.steps":
+        engine = ProtocolQueryEngine(Path(resolve_domain_output_dir("protocol_analysis", output_dir, context)))
+        result = engine.get_protocol_steps(str(arguments["protocol_id"]), str(arguments.get("stage_id") or ""))
+        return evidence_response_envelope(context=context, subagent=action.agent, status=result["status"],
+            question=str(arguments.get("question", "")), selected_operation=action.id, result_preview=result,
+            used_tools=[action.implementation], evidence_refs=[{"step_id": row["step_id"],
+                "source_ref": row["source_ref"], "evidence_quote": row["evidence_quote"],
+                "source_text": row["source_text"]} for row in result["semantic_steps"]],
+            output_files={"semantic_step_annotations": result["artifact"]},
+            validation={"step_findings": [{"step_id": row["step_id"], "notes": row["validation_notes"]}
+                for row in result["semantic_steps"]]}, confidence_caveats=result["limitations"],
+            extra={"action_id": action.id})
+    if action.id == "protocol.assess":
+        engine = ProtocolQueryEngine(Path(resolve_domain_output_dir("protocol_analysis", output_dir, context)))
+        result = assess_protocols(engine, arguments.get("protocol_ids", []))
+        evidence = [{"protocol_id": row["protocol_id"], "paper_id": (row.get("matrix") or {}).get("paper_id"),
+                     "events": row["events"], "structured_steps": row["structured_steps"]}
+                    for row in result.get("protocol_assessments", [])]
+        return evidence_response_envelope(context=context, subagent=action.agent, status=result["status"],
+            question=str(arguments.get("question", "")), selected_operation=action.id, result_preview=result,
+            used_tools=[action.implementation], evidence_refs=evidence,
+            validation={"evidence_gaps": result.get("evidence_gaps", [])},
+            confidence_caveats=["Descriptive assessment or unvalidated hypotheses, not causal effects."],
+            extra={"action_id": action.id})
+    return protocol_analysis_agent.invoke({"question": arguments.get("question", "Compare protocols"),
+        "request": arguments if action.id == "protocol.compare" else None,
+        "protocol_output_dir": output_dir, "max_features": max_features, **context.tool_inputs()})

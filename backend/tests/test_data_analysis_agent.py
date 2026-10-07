@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 
 import pytest
-from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
+from protocol_optimization_agent.agents import data_analysis as da
+from protocol_optimization_agent.agents.data_analysis import (
+    TASK_OUTPUTS,
+    DataAnalysisAgent,
+    data_analysis_agent,
+    resolve_data_tasks,
+)
 from protocol_optimization_agent.analysis.phenotype.external_tools import get_external_data_analysis_tools
 from protocol_optimization_agent.analysis.phenotype.h5ad_tools import (
     compute_differential_expression,
@@ -40,7 +46,7 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
 
     outputs = DataAnalysisAgent(
         output_dir=tmp_path,
-        h5ad_config={"reference_dataset_id": "atlas_vivo"},
+        h5ad_config={"requested_tasks": ["cell_type_composition", "gene_program_score"], "reference_dataset_id": "atlas_vivo"},
         reference_atlas_path=tmp_path / "missing_reference.h5ad",
         gene_programs=gene_programs,
         project_root=tmp_path,
@@ -48,14 +54,8 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
 
     expected = {
         "h5ad_summary_by_protocol",
-        "maturity_scores",
-        "similarity_scores",
         "cell_type_composition",
-        "marker_scores",
         "gene_program_scores",
-        "regulatory_program_scores",
-        "trajectory_scores",
-        "external_tool_inventory",
         "data_analysis_protocol_summary",
         "h5ad_qc_report",
         "h5ad_analysis_limitations",
@@ -64,52 +64,38 @@ def test_data_analysis_agent_exports_framework_outputs(tmp_path: Path) -> None:
         "data_analysis_query_result",
         "data_analysis_execution_plan",
         "data_analysis_validation",
-        "exploratory_analysis_script",
-        "exploratory_environment",
-        "exploratory_config",
-        "exploratory_diagnostics",
     }
     assert expected.issubset(outputs)
     assert all(path.exists() for path in outputs.values())
 
-    maturity_rows = list(csv.DictReader(outputs["maturity_scores"].open(encoding="utf-8")))
-    assert {row["lineage"] for row in maturity_rows} == {"beta", "ductal"}
-    assert {row["status"] for row in maturity_rows} == {"input_data_pending"}
+    assert not {"maturity_scores", "similarity_scores", "regulatory_program_scores", "trajectory_scores"}.intersection(outputs)
+    assert not any(key.startswith("exploratory_") for key in outputs)
+    assert not (outputs["data_analysis_validation"].parent / "exploratory").exists()
 
     gene_program_rows = list(csv.DictReader(outputs["gene_program_scores"].open(encoding="utf-8")))
-    assert {row["gene_program"] for row in gene_program_rows} == {
-        "mature_beta",
-        "immature_beta",
-        "ductal_identity",
-    }
-
-    similarity_rows = list(csv.DictReader(outputs["similarity_scores"].open(encoding="utf-8")))
-    assert similarity_rows[0]["reference_dataset_id"] == "atlas_vivo"
-    assert similarity_rows[0]["cosine_similarity"] == ""
-    assert similarity_rows[0]["euclidean_distance"] == ""
+    assert gene_program_rows[0]["status"] == "dependency_failed"
 
     comparison = json.loads(outputs["data_analysis_comparison_report"].read_text(encoding="utf-8"))
-    assert comparison["schema_version"] == "data-analysis-comparison-report-v1"
-    assert "organoid_reference_similarity" in comparison["comparison_axes"]
-    assert any(tool["tool_id"] == "gene_program_maturity_score" for tool in comparison["tool_registry"])
-    assert "scanpy_h5ad_profile_tool" in comparison["callable_tools"]
-    assert any(tool["tool_id"] == "scanpy_h5ad_profile_tool" for tool in comparison["external_tool_inventory"])
+    assert comparison["schema_version"] == "data-analysis-comparison-report-v2"
+    assert comparison["comparison_axes"] == ["cell_type_composition", "gene_program_score"]
+    registry = json.loads(outputs["data_analysis_tool_registry"].read_text(encoding="utf-8"))
+    assert any(tool["tool_id"] == "gene_program_maturity_score" for tool in registry["tools"])
+    assert "scanpy_h5ad_profile_tool" in registry["callable_tools"]
 
     qc_report = json.loads(outputs["h5ad_qc_report"].read_text(encoding="utf-8"))
     assert qc_report["input_gate_report"]["summary"]["n_gene_program_lineages"] == 2
     assert [step["node"] for step in qc_report["step_log"]][:3] == [
         "data_input_gate",
-        "analysis_execution_planner",
+        "resolve_tasks",
         "dataset_inventory_builder",
     ]
 
     validation = json.loads(outputs["data_analysis_validation"].read_text(encoding="utf-8"))
     assert validation["task_validity"]["maturity"]["valid"] is False
+    assert validation["task_validity"]["maturity"]["checks"]["status"] == "not_requested"
     assert validation["quality_interpretation"].endswith("not a statistical confidence probability.")
 
-    external_rows = list(csv.DictReader(outputs["external_tool_inventory"].open(encoding="utf-8")))
-    scanpy_row = next(row for row in external_rows if row["tool_id"] == "scanpy_h5ad_profile_tool")
-    assert scanpy_row["source_downloaded"] == "True"
+    assert "external_tool_inventory" not in outputs
 
     agent = DataAnalysisAgent(output_dir=tmp_path, project_root=tmp_path)
     call_result = agent.call_tool("scanpy_h5ad_profile_tool")
@@ -131,6 +117,7 @@ def test_data_analysis_agent_runs_small_h5ad_analysis(tmp_path: Path) -> None:
     outputs = DataAnalysisAgent(
         output_dir=tmp_path / "out",
         h5ad_config={
+            "requested_tasks": ["cell_type_composition", "gene_expression", "marker_score", "differential_expression"],
             "annotation_cell_type_column": "cell_type",
             "batch_column": "batch",
             "lineage_column": "lineage",
@@ -195,6 +182,7 @@ def test_same_h5ad_can_define_multiple_manifest_datasets(tmp_path: Path) -> None
     outputs = DataAnalysisAgent(
         output_dir=tmp_path / "out",
         h5ad_config={
+            "requested_tasks": ["cell_type_composition"],
             "annotation_cell_type_column": "cell_type",
             "batch_column": "batch",
             "lineage_column": "lineage",
@@ -408,3 +396,171 @@ def _write_raw_reordered_h5ad(tmp_path: Path) -> Path:
     path = tmp_path / "raw_reordered.h5ad"
     adata.write_h5ad(path)
     return path
+
+
+def _task_config():
+    return {"annotation_cell_type_column": "cell_type", "batch_column": "batch", "lineage_column": "lineage",
+            "query_genes": ["INS"], "marker_sets": {"beta": ["INS", "IAPP"]},
+            "gene_programs": {"beta": {"identity": ["INS", "IAPP"]}},
+            "differential_expression": {"groupby": "cell_type", "group_a": "beta", "group_b": "alpha", "genes": ["INS"]},
+            "expression_scale": "normalized", "maturity": {"cell_types": ["Beta"]}}
+
+
+def _task_spies(monkeypatch):
+    calls = []
+    for name in ("compute_cell_type_composition", "query_gene_expression", "compute_differential_expression",
+                 "compute_marker_scores", "_compute_gene_program_scores"):
+        original = getattr(da, name)
+
+        def traced(*args, _name=name, _original=original, **kwargs):
+            calls.append(_name)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(da, name, traced)
+
+    def programs(*args, **kwargs):
+        calls.append("load_maturity_programs")
+        return {"Beta": {}}
+
+    def maturity(row, config, programs, path):
+        calls.append("compute_maturity_scores")
+        return {"rows": [{"protocol_id": row["protocol_id"], "dataset_id": row["dataset_id"],
+                          "lineage": "Beta", "maturity_score": 0.3, "status": "ok"}], "audit": {"status": "ok"}}
+
+    monkeypatch.setattr(da, "load_maturity_programs", programs)
+    monkeypatch.setattr(da, "compute_maturity_scores", maturity)
+    return calls
+
+
+@pytest.mark.parametrize("task,expected", [
+    ("cell_type_composition", ["compute_cell_type_composition"]),
+    ("gene_expression", ["query_gene_expression"]),
+    ("differential_expression", ["compute_differential_expression"]),
+    ("marker_score", ["compute_marker_scores"]),
+    ("gene_program_score", ["_compute_gene_program_scores", "compute_marker_scores"]),
+    ("maturity", ["load_maturity_programs", "compute_maturity_scores"]),
+])
+def test_only_requested_task_is_called_and_exported(tmp_path, monkeypatch, task, expected):
+    path = _write_synthetic_h5ad(tmp_path)
+    calls = _task_spies(monkeypatch)
+    outputs = DataAnalysisAgent(tmp_path / "out", {**_task_config(), "requested_tasks": [task]}).run(
+        [{"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": str(path)}])
+    assert calls == expected
+    assert {item[1] for item in TASK_OUTPUTS.values()}.intersection(outputs) == {TASK_OUTPUTS[task][1]}
+    validation = json.loads(outputs["data_analysis_validation"].read_text())
+    assert validation["requested_tasks"] == [task]
+    assert validation["task_validity"][task]["valid"] is True
+    plan = json.loads(outputs["data_analysis_execution_plan"].read_text())
+    assert [step["task"] for step in plan["steps"]] == [task]
+    assert plan["steps"][0]["depends_on"] == ["dataset_inventory_builder"]
+    assert "standard_tools" not in plan
+
+
+def test_default_summary_does_not_infer_tasks_from_options(tmp_path, monkeypatch):
+    path = _write_synthetic_h5ad(tmp_path)
+    calls = _task_spies(monkeypatch)
+    outputs = DataAnalysisAgent(tmp_path / "out", _task_config()).run([
+        {"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": str(path)}])
+    assert calls == []
+    assert not {item[1] for item in TASK_OUTPUTS.values()}.intersection(outputs)
+    report = json.loads(outputs["data_analysis_validation"].read_text())
+    assert report["validation_status"] == "passed"
+    assert report["requested_tasks"] == ["summary"]
+    assert "external_tool_inventory" not in outputs
+
+
+def test_plan_parameters_control_execution_not_mutated_config(tmp_path, monkeypatch):
+    path = _write_synthetic_h5ad(tmp_path)
+    calls = _task_spies(monkeypatch)
+    agent = DataAnalysisAgent(tmp_path / "out")
+    state = agent._node_data_input_gate({"manifest_rows": [{"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": str(path)}],
+        "h5ad_config": {**_task_config(), "requested_tasks": ["gene_expression"]}})
+    state = agent._node_dataset_inventory_builder(agent._node_resolve_tasks(state))
+    state["h5ad_config"]["requested_tasks"] = ["maturity"]
+    state["h5ad_config"]["query_genes"].append("MISSING")
+    assert state["execution_plan"]["steps"][0]["parameters"]["query_genes"] == ["INS"]
+    state["execution_plan"]["steps"][0]["parameters"]["query_genes"] = ["IAPP"]
+    result = agent._node_execute_tasks(state)
+    assert calls == ["query_gene_expression"]
+    assert result["gene_expression_rows"][0]["gene"] == "IAPP"
+    validation = agent._node_data_analysis_audit(result)["validation_report"]
+    assert validation["requested_tasks"] == ["gene_expression"]
+    assert validation["task_validity"]["gene_expression"]["valid"] is True
+
+
+def test_multiple_tasks_are_deduplicated_and_numerically_unchanged(tmp_path, monkeypatch):
+    path = _write_synthetic_h5ad(tmp_path)
+    row = {"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": str(path)}
+    config = _task_config()
+    expected_expression = query_gene_expression(row, config, ["INS"])
+    calls = _task_spies(monkeypatch)
+    outputs = DataAnalysisAgent(tmp_path / "out", {**config, "requested_tasks": ["gene_expression", "cell_type_composition", "gene_expression"]}).run([row])
+    assert calls == ["query_gene_expression", "compute_cell_type_composition"]
+    actual = list(csv.DictReader(outputs["gene_expression_summary"].open(encoding="utf-8")))
+    assert float(actual[0]["mean_expression"]) == expected_expression[0]["mean_expression"]
+    plan = json.loads(outputs["data_analysis_execution_plan"].read_text())
+    assert plan["requested_tasks"] == ["gene_expression", "cell_type_composition"]
+
+
+def test_task_failure_does_not_trigger_other_methods_or_erase_success(tmp_path, monkeypatch):
+    path = _write_synthetic_h5ad(tmp_path)
+
+    def broken(*args, **kwargs):
+        raise ValueError("expression layer is incompatible")
+
+    monkeypatch.setattr(da, "query_gene_expression", broken)
+    outputs = DataAnalysisAgent(tmp_path / "out", {**_task_config(), "requested_tasks": ["gene_expression", "cell_type_composition"]}).run([
+        {"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": str(path)}])
+    validation = json.loads(outputs["data_analysis_validation"].read_text())
+    assert validation["task_validity"]["gene_expression"]["valid"] is False
+    assert validation["task_validity"]["cell_type_composition"]["valid"] is True
+    outcomes = json.loads(outputs["data_analysis_task_results"].read_text())["tasks"]
+    assert outcomes[0]["failures"][0]["message"] == "expression layer is incompatible"
+    assert outcomes[1]["status"] == "ok"
+    assert "maturity_scores" not in outputs
+
+
+def test_missing_parameters_and_unavailable_methods_are_reported(tmp_path, monkeypatch):
+    path = _write_synthetic_h5ad(tmp_path)
+    calls = _task_spies(monkeypatch)
+    outputs = DataAnalysisAgent(tmp_path / "out", {"requested_tasks": ["gene_expression", "reference_similarity", "unknown"]}).run([
+        {"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": str(path)}])
+    assert calls == []
+    outcomes = json.loads(outputs["data_analysis_task_results"].read_text())["tasks"]
+    assert [row["status"] for row in outcomes] == ["inputs_missing", "unavailable", "unavailable"]
+    assert all(row["executed"] is False for row in outcomes)
+    assert "similarity_scores" not in outputs
+    assert json.loads(outputs["data_analysis_validation"].read_text())["validation_status"] == "failed"
+
+
+def test_chat_operation_executes_only_expression_and_returns_plan(tmp_path, monkeypatch):
+    path = _write_synthetic_h5ad(tmp_path)
+    calls = _task_spies(monkeypatch)
+    result = data_analysis_agent.invoke({"question": "INS expression", "data_analysis_output_dir": str(tmp_path / "out"),
+        "workspace_root": str(tmp_path), "user_id": "test", "run_id": "expression_only",
+        "h5ad_manifest_rows": [{"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": str(path)}],
+        "h5ad_config": _task_config()})
+    assert calls == ["query_gene_expression"]
+    assert result["status"] == "ok"
+    assert result["execution_plan"]["requested_tasks"] == ["gene_expression"]
+    assert result["task_results"][0]["status"] == "ok"
+    assert result["used_tools"] == ["query_gene_expression"]
+    assert "cell_type_composition.csv" not in result["available_output_files"]
+
+
+def test_task_list_type_is_validated_before_any_analysis():
+    with pytest.raises(ValueError, match="requested_tasks"):
+        resolve_data_tasks({"requested_tasks": "gene_expression"})
+    assert resolve_data_tasks({"requested_tasks": []})["steps"] == []
+
+
+def test_de_validation_uses_the_executed_plan_scale(tmp_path):
+    path = _write_synthetic_h5ad(tmp_path)
+    agent = DataAnalysisAgent(tmp_path / "out")
+    state = agent._node_data_input_gate({"manifest_rows": [{"protocol_id": "p1", "dataset_id": "d1", "h5ad_path": str(path)}],
+        "h5ad_config": {**_task_config(), "requested_tasks": ["differential_expression"]}})
+    state = agent._node_dataset_inventory_builder(agent._node_resolve_tasks(state))
+    state["h5ad_config"]["expression_scale"] = "unknown"
+    result = agent._node_data_analysis_audit(agent._node_execute_tasks(state))
+    assert result["differential_expression_rows"][0]["expression_scale"] == "normalized"
+    assert result["validation_report"]["task_validity"]["differential_expression"]["valid"] is True

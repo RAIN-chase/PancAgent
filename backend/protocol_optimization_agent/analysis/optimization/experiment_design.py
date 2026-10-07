@@ -75,7 +75,7 @@ def design_experiments(
                 protocol_ids=edit.get("source_protocols", []),
                 caveats=["Observational associations do not establish intervention effects."],
                 mechanism_explanation=str(edit.get("mechanism_explanation") or edit.get("rationale") or "unknown"),
-                supporting_evidence_refs=edit.get("evidence_refs", []),
+                supporting_evidence_refs=[*edit.get("evidence_refs", []), *edit.get("supporting_literature_refs", [])],
                 opposing_evidence_refs=[*edit.get("opposing_evidence_refs", []),
                                         *previous.get("opposing_evidence_refs", [])],
                 evidence_for=previous.get("evidence_for", []),
@@ -88,10 +88,12 @@ def design_experiments(
                 applicable_conditions=test_spec["context"],
                 expected_change={"endpoint": test_spec["endpoints"],
                                  "direction": edit.get("expected_direction") or "unknown",
+                                 "by_endpoint": edit.get("endpoint_expectations", {}),
                                  "magnitude": "unknown; not an estimated success probability"},
                 falsification_conditions=edit.get("falsification_conditions") or [
                     "Matched independent replicates show no predicted endpoint change or the opposite direction.",
                     "The proposed mechanism does not reproduce under the declared intervention and context."],
+                competing_explanations=edit.get("competing_explanations", []),
             )
         )
         critique = []
@@ -134,6 +136,7 @@ def design_experiments(
                     "objective": objective,
                     "prior_hypothesis": previous,
                     "cohort_fingerprint": preconditions.get("input_fingerprint", "unknown"),
+                    "evidence_package_id": edit.get("evidence_package_id", ""),
                 },
                 eligible=not critique,
             )

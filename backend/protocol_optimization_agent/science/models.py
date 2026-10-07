@@ -88,6 +88,7 @@ class Hypothesis(Claim):
     applicable_conditions: dict[str, Any] = Field(default_factory=dict)
     expected_change: dict[str, Any] = Field(default_factory=dict)
     falsification_conditions: list[str] = Field(default_factory=list)
+    competing_explanations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DecisionAssessment(BaseModel):

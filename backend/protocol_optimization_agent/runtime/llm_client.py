@@ -128,6 +128,17 @@ def build_llm_client(config: dict[str, Any] | None) -> LLMClient:
     raise ValueError(f"Unsupported llm provider: {provider}")
 
 
+def build_json_llm_client_from_env() -> LLMClient:
+    """Use server-owned chat provider settings for opt-in PO JSON calls."""
+    provider = os.getenv("PROTOCOL_CHAT_LLM_PROVIDER") or (
+        "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "openai" if os.getenv("OPENAI_API_KEY") else "offline")
+    return build_llm_client({"provider": provider,
+        "model": os.getenv("PROTOCOL_CHAT_MODEL") or ("deepseek-chat" if provider == "deepseek" else "gpt-4o-mini"),
+        "api_key_env": os.getenv("PROTOCOL_CHAT_API_KEY_ENV") or ("DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY"),
+        "base_url": os.getenv("PROTOCOL_CHAT_BASE_URL") or ("https://api.deepseek.com" if provider == "deepseek" else "https://api.openai.com/v1"),
+        "timeout_seconds": int(os.getenv("PROTOCOL_CHAT_TIMEOUT_SECONDS") or 60)})
+
+
 def _build_chat_model_from_env() -> Runnable | None:
     provider = os.getenv("PROTOCOL_CHAT_LLM_PROVIDER")
     if not provider and os.getenv("DEEPSEEK_API_KEY"):

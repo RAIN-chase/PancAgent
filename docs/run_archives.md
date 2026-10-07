@@ -2,7 +2,7 @@
 
 ## Coverage and Ownership
 
-The conversational Orchestrator, standalone `protocol_chat` graph, fixed pipeline,
+The conversational Orchestrator, fixed pipeline,
 three agents' `run()` methods, PA and protocol-query CLIs, and protocol analysis/query/chat API use the
 shared `RunArchive` journal. Scientific approvals and feedback remain in the
 existing project SQLite world model; archives reference their exact evaluation

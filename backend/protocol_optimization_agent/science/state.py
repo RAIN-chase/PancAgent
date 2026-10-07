@@ -225,7 +225,7 @@ class ScientificWorldModel:
             previous = db.execute("SELECT payload FROM history WHERE kind='analysis_result' ORDER BY seq DESC LIMIT 1").fetchone()
         return {
             "hypotheses": [
-                {key: h.get(key) for key in ("id", "topic_id", "test_spec", "status", "evidence_for", "evidence_against", "tested_experiment_ids")}
+                {key: h.get(key) for key in ("id", "topic_id", "test_spec", "status", "evidence_for", "evidence_against", "tested_experiment_ids", "opposing_evidence_refs")}
                 for h in hypotheses
             ],
             "feedback_fingerprint": self.feedback_fingerprint(),

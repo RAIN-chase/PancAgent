@@ -28,6 +28,10 @@ METRIC_COLUMNS = {
 }
 
 CONTEXT_FIELDS = (
+    "protocol_version",
+    "protocol_snapshot_id",
+    "standard_error",
+    "confidence_interval",
     "cell_line",
     "stage",
     "sequencing_modality",
@@ -156,7 +160,7 @@ def build_phenotype_ir(
                             "protocol_id": key[0],
                             "dataset_id": key[1],
                         }
-                    ],
+                    ] + row.get("evidence_refs", []),
                 )
             )
     return {

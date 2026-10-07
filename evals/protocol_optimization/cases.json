@@ -1,0 +1,7 @@
+[
+  {"id":"single_study_strong_signal","fixture_kind":"synthetic","values":[[0,0],[1,1],[2,2],[3,3],[4,4],[5,5]],"studies":[["a"],["a"],["a"],["a"],["a"],["a"]],"expected":"not_evaluable_unknown_study_or_insufficient_folds"},
+  {"id":"study_driven_reversal","fixture_kind":"synthetic","values":[[10,10],[11,11],[0,2],[1,1],[2,0],[3,-1]],"studies":[["a"],["a"],["b"],["b"],["c"],["c"]],"expected":"direction_unstable"},
+  {"id":"stable_descriptive_signal","fixture_kind":"synthetic","values":[[0,0],[1,1],[2,2],[3,3],[4,4],[5,5]],"studies":[["a"],["a"],["b"],["b"],["c"],["c"]],"expected":"direction_stable_exploratory"},
+  {"id":"unknown_study_not_validation","fixture_kind":"synthetic","values":[[0,0],[1,1],[2,2],[3,3],[4,4],[5,5]],"studies":[["unknown"],["a"],["b"],["b"],["c"],["c"]],"expected":"not_evaluable_unknown_study_or_insufficient_folds"},
+  {"id":"multistudy_protocol_no_fold_leakage","fixture_kind":"synthetic","values":[[0,0],[1,1],[2,2],[3,3],[4,4],[5,5]],"studies":[["a"],["a","b"],["b"],["b"],["c"],["c"]],"expected":"direction_stable_exploratory"}
+]

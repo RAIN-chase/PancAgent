@@ -196,7 +196,7 @@ Minimum data query operations:
 
 The current frontend may remain generic chat UI, but SubAgent outputs should support protocol-specific rendering.
 
-The default frontend assistant id should point to `orchestrator`; `protocol_chat` remains available as a lower-level Protocol Analysis chat graph.
+The frontend assistant id is `orchestrator`, the sole conversational graph. PA-only questions use the same planning and result contracts and execute PA alone.
 
 Recommended UI blocks:
 

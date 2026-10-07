@@ -231,6 +231,17 @@ class ProtocolQueryEngine:
         events = [event for event in self.normalized_events if str(event.get("protocol_id") or "") == protocol_id]
         return events[:limit] if limit else events
 
+    def get_protocol_steps(self, protocol_id: str, stage_id: str = "") -> dict[str, Any]:
+        from protocol_optimization_agent.runtime.io import read_jsonl
+
+        path = self.output_dir / "semantic_step_annotations.jsonl"
+        steps = [row for row in read_jsonl(path) if row.get("protocol_id") == protocol_id
+                 and (not stage_id or row.get("stage_id") == stage_id)]
+        return {"status": "ok" if steps else "not_found" if path.exists() else "unavailable",
+                "protocol_id": protocol_id, "semantic_steps": steps, "artifact": str(path),
+                "limitations": ["Interpretations do not establish source support or experimental equivalence.",
+                                "Older runs require PA recompilation; retrieval never reparses with an LLM."]}
+
     def query_matrix(
         self,
         filters: dict[str, Any] | None = None,

@@ -63,10 +63,11 @@ DATA_ANALYSIS_TOOL_REGISTRY: list[dict[str, Any]] = [
     {
         "tool_id": "gene_program_maturity_score",
         "category": "transcriptional_maturity",
-        "status": "stub_pending_implementation",
-        "purpose": "Score lineage-specific maturity from user-provided gene program lists across organoid and reference datasets.",
-        "expected_inputs": ["gene_programs", "lineage_column", "expression_matrix"],
-        "outputs": ["maturity_scores.csv", "gene_program_scores.csv"],
+        "status": "implemented",
+        "version": "early-late-scanpy-v1",
+        "purpose": "Score Alpha/Beta/Delta Early and Late programs from counts; report descriptive Late-minus-Early deltas.",
+        "expected_inputs": ["six_gene_program_csvs", "cell_type_column", "raw_counts"],
+        "outputs": ["maturity_scores.csv", "maturity_audit.json", "maturity_cells_*.csv"],
     },
     {
         "tool_id": "reference_similarity",
@@ -248,7 +249,7 @@ def inspect_h5ad_dataset(row: dict[str, Any], h5ad_config: dict[str, Any]) -> di
 
     adata = None
     try:
-        adata = _read_h5ad(path, backed=bool(h5ad_config.get("backed", True)))
+        adata = _read_h5ad_metadata(path)
         obs_columns = [str(column) for column in adata.obs.columns]
         var_names = [str(name) for name in list(adata.var_names[: int(h5ad_config.get("var_preview_limit", 20))])]
         layers = [str(layer) for layer in getattr(adata, "layers", {}).keys()]
@@ -870,7 +871,7 @@ def build_placeholder_trajectory_rows(row: dict[str, Any]) -> list[dict[str, Any
 
 def _common_dataset_fields(row: dict[str, Any]) -> dict[str, str]:
     return {
-        **{key: str(row[key]) for key in ("study_id", "biological_replicate_id", "cell_line", "culture_batch", "sequencing_batch") if row.get(key)},
+        **{key: str(row[key]) for key in ("study_id", "biological_replicate_id", "cell_line", "culture_batch", "sequencing_batch", "protocol_version", "protocol_snapshot_id") if row.get(key)},
         "protocol_id": str(row.get("protocol_id") or ""),
         "dataset_id": str(row.get("dataset_id") or ""),
         "condition_id": str(row.get("condition_id") or ""),
@@ -905,6 +906,21 @@ def _read_h5ad(path: Path, backed: bool = False) -> Any:
     import anndata as ad
 
     return ad.read_h5ad(path, backed="r" if backed else None)
+
+
+def _read_h5ad_metadata(path: Path) -> Any:
+    """Read obs/var without AnnData's eager loading of layers and embeddings."""
+    from types import SimpleNamespace
+
+    import h5py
+    from anndata.io import read_elem
+
+    with h5py.File(path, "r") as handle:
+        obs, var = read_elem(handle["obs"]), read_elem(handle["var"])
+        return SimpleNamespace(obs=obs, var=var, var_names=var.index, n_obs=len(obs), n_vars=len(var),
+                               layers=dict.fromkeys(handle.get("layers", {}).keys()),
+                               obsm=dict.fromkeys(handle.get("obsm", {}).keys()),
+                               raw=True if "raw" in handle else None)
 
 
 def _close_backed(adata: Any) -> None:

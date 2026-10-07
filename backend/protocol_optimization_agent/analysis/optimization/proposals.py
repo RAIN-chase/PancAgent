@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from protocol_optimization_agent.analysis.optimization._shared import _to_float
 from protocol_optimization_agent.analysis.optimization.association import _candidate_protocol_features
 from protocol_optimization_agent.analysis.optimization.contracts import ProtocolOptimizingState
+from protocol_optimization_agent.analysis.optimization.mechanisms import interpret_mechanisms
+from protocol_optimization_agent.runtime.llm_client import LLMClient, OfflineLLMClient
 
 
 def _fallback_candidate_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -191,7 +194,7 @@ def _evidence_summary(evidence_refs: list[dict[str, Any]]) -> str:
     return "; ".join(factors[:3])
 
 
-def _mechanistic_relevance(feature: str) -> str:
+def _feature_topic_hint(feature: str) -> str:
     lowered = feature.lower()
     if "maturation" in lowered or "beta" in lowered:
         return "direct_maturity_or_beta_identity_axis"
@@ -242,6 +245,17 @@ def _build_protocol_edits(candidates: list[dict[str, Any]], objective: dict[str,
                 "source_protocols": _source_protocols(evidence_refs),
                 "rationale": _change_text(feature, role),
                 "mechanistic_relevance": candidate.get("mechanistic_relevance", ""),
+                "mechanism_explanation": candidate.get("mechanism_explanation", "unknown"),
+                "mechanism_status": candidate.get("mechanism_status", "mechanism_evidence_missing"),
+                "supporting_literature_refs": candidate.get("supporting_literature_refs", []),
+                "opposing_evidence_refs": candidate.get("opposing_evidence_refs", []),
+                "alternative_explanations": candidate.get("alternative_explanations", []),
+                "competing_explanations": candidate.get("competing_explanations", []),
+                "falsification_conditions": candidate.get("falsification_conditions", []),
+                "expected_direction": candidate.get("expected_direction", "unknown"),
+                "endpoint_expectations": candidate.get("endpoint_expectations", {}),
+                "endpoint_associations": candidate.get("endpoint_associations", []),
+                "evidence_package_id": candidate.get("evidence_package_id", ""),
                 "effect_estimate": candidate.get("effect_estimate", ""),
                 "confidence": candidate.get("confidence", "low"),
                 "confounding_risk": candidate.get("confounding_risk", "high_unknown"),
@@ -399,9 +413,13 @@ def _render_protocol_markdown(protocol_doc: dict[str, Any]) -> str:
                 "",
                 f"- Candidate feature: `{rec.get('candidate_feature', '')}`",
                 f"- Proposed change: {rec.get('proposed_change', '')}",
-                f"- Source basis: {rec.get('source_basis', '')}",
+                f"- Protocol/observation basis: {rec.get('source_basis', '')}",
                 f"- Confidence: `{rec.get('confidence', 'low')}`",
                 f"- Risk: {rec.get('risk', '')}",
+                f"- Mechanism: {rec.get('stage_level_edit', {}).get('mechanism_explanation', 'unknown')}",
+                f"- Mechanism status: `{rec.get('stage_level_edit', {}).get('mechanism_status', 'unknown')}`",
+                f"- Competing explanations: {'; '.join(rec.get('stage_level_edit', {}).get('alternative_explanations', []))}",
+                f"- Falsification: {'; '.join(rec.get('stage_level_edit', {}).get('falsification_conditions', []))}",
                 "",
             ]
         )
@@ -440,13 +458,19 @@ def _render_validation_markdown(plan: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def rank_mechanistic_evidence(state: ProtocolOptimizingState, max_candidate_features: int) -> ProtocolOptimizingState:
+def rank_mechanistic_evidence(state: ProtocolOptimizingState, max_candidate_features: int,
+                             llm_client: LLMClient | None = None,
+                             literature_search: Callable[[str, int], list[dict[str, Any]]] | None = None) -> ProtocolOptimizingState:
     candidates: list[dict[str, Any]] = []
     if state.get("association_rows"):
         source_rows = state["association_rows"]
     else:
         source_rows = _fallback_candidate_rows(state.get("protocol_feature_rows", []), max_candidate_features)
-    for index, row in enumerate(source_rows, start=1):
+    features = list(dict.fromkeys(str(row.get("feature") or "") for row in source_rows))[:max_candidate_features]
+    for index, feature in enumerate(features, start=1):
+        rows = [row for row in source_rows if row.get("feature") == feature]
+        endpoint_rows = [row for row in rows if row.get("analysis_role") == "primary_raw_endpoint"]
+        row = endpoint_rows[0] if endpoint_rows else rows[0]
         feature = str(row.get("feature") or "")
         evidence_refs = _feature_evidence_refs(
             feature, state.get("feature_provenance", {}), state.get("stage_event_rows", [])
@@ -459,12 +483,16 @@ def rank_mechanistic_evidence(state: ProtocolOptimizingState, max_candidate_feat
                 "rank": index,
                 "effect_estimate": row.get("effect_estimate", ""),
                 "n_protocols": row.get("n_protocols", ""),
-                "mechanistic_relevance": _mechanistic_relevance(feature),
+                "mechanistic_relevance": "unverified; feature_topic_hint_is_not_mechanism_evidence",
+                "feature_topic_hint": _feature_topic_hint(feature),
                 "evidence_status": "provenance_available" if evidence_refs else "feature_level_only",
                 "evidence_summary": evidence_summary[:500],
                 "evidence_refs": evidence_refs,
-                "recommendation_role": _recommendation_role(feature, row),
-                "confidence": _candidate_confidence(row, evidence_summary),
+                "recommendation_role": "study_variable_only" if endpoint_rows else "prioritize_for_review",
+                "confidence": "low",
+                "endpoint_associations": endpoint_rows,
+                "auxiliary_associations": [item for item in rows if item.get("analysis_role") == "cohort_relative_auxiliary"],
+                "rank_policy": "screen_order_only_not_intervention_effect_or_success_probability",
                 "confounding_risk": row.get("confounding_risk", "high_unknown"),
                 "causal_interpretation": "hypothesis_requires_experimental_validation",
             }
@@ -472,7 +500,26 @@ def rank_mechanistic_evidence(state: ProtocolOptimizingState, max_candidate_feat
     candidates.sort(key=lambda candidate: (not bool(candidate.get("evidence_refs")), int(candidate["rank"])))
     for index, candidate in enumerate(candidates, start=1):
         candidate["rank"] = index
-    return {"candidate_feature_rows": candidates}
+    report = interpret_mechanisms(candidates, state.get("joint_evidence", {"id": "unavailable", "limitations": []}),
+        state.get("objective", {}).get("mechanism", {}),
+        [*state.get("literature_records", []), *state.get("objective", {}).get("mechanism", {}).get("evidence", [])],
+        llm_client or OfflineLLMClient(), literature_search)
+    interpretations = {item["feature"]: item for item in report["interpretations"]}
+    for candidate in candidates:
+        explanation = interpretations[candidate["feature"]]
+        candidate.update({key: explanation[key] for key in ("mechanism_explanation", "opposing_evidence_refs",
+            "alternative_explanations", "competing_explanations", "falsification_conditions", "expected_direction", "endpoint_expectations")})
+        candidate["mechanism_status"] = explanation["status"]
+        candidate["supporting_literature_refs"] = explanation["supporting_evidence_refs"]
+        candidate["evidence_package_id"] = report["evidence_package_id"]
+        metric_ids = {mid for row in candidate["endpoint_associations"] for point in row["points"] for mid in point["metric_ids"]}
+        candidate["phenotype_evidence_refs"] = [{"evidence_kind": "phenotype_observation", "protocol_id": row["protocol_id"],
+            "dataset_id": row["dataset_id"], "sample_id": row["sample_id"], "metric_id": row["metric_id"],
+            "observation_id": row["observation_id"], "path": "analysis_dataset.json", **row["result_ref"]}
+            for row in state.get("joint_evidence", {}).get("observations", []) if row["metric_id"] in metric_ids]
+        candidate["evidence_refs"] = [*[{**ref, "evidence_kind": "protocol_use"} for ref in candidate["evidence_refs"]],
+                                      *candidate["phenotype_evidence_refs"]]
+    return {"candidate_feature_rows": candidates, "mechanism_report": report}
 
 
 def generate_protocol_proposal(state: ProtocolOptimizingState) -> ProtocolOptimizingState:
@@ -486,11 +533,14 @@ def generate_protocol_proposal(state: ProtocolOptimizingState) -> ProtocolOptimi
             "n_candidate_features": len(state.get("candidate_feature_rows", [])),
             "n_recommendations": len(recommendations),
             "n_stage_level_edits": len(edits),
-            "prediction_status": state.get("prediction_report", {}).get("status", "not_requested"),
+            "reference_status": state.get("reference_report", {}).get("status", "not_requested"),
         },
         "recommendations": recommendations,
         "protocol_edits": edits,
-        "counterfactual_prediction": state.get("prediction_report", {}),
+        "similar_protocol_reference": state.get("reference_report", {}),
+        "evidence_package_id": state.get("joint_evidence", {}).get("id"),
+        "mechanism_evidence_ref": "mechanism_evidence.json",
+        "quantitative_results_ref": "endpoint_associations.json",
     }
     validation_plan = {
         "schema_version": "experimental-validation-plan-v1",

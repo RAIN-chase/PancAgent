@@ -353,14 +353,22 @@ def build_phenotype_targets(state: ProtocolOptimizingState) -> ProtocolOptimizin
     targets: list[dict[str, Any]] = []
     gate = state.get("scientific_preconditions", {})
     included = set(gate.get("cohort", {}).get("included_metric_ids", []))
+    identity_by_metric = {row["metric_id"]: row for row in state.get("joint_evidence", {}).get("observations", [])}
     for phenotype in state.get("analysis_dataset", {}).get("phenotypes", []):
         for metric in phenotype["metrics"]:
             row = {**phenotype.get("metadata", {}), **metric.get("context", {})}
             table_name = row.get("source_table") or metric["family"]
             protocol_id = phenotype["protocol_id"]
             endpoint = metric["endpoint"]
+            qualified = f"{metric['family']}:{endpoint}"
+            if qualified in state.get("endpoint_preconditions", {}):
+                endpoint = qualified
             score_column = row.get("source_column", "score")
-            score = metric["value"] if gate.get("scientific_ready") and metric["id"] in included else None
+            endpoint_gate = state.get("endpoint_preconditions", {}).get(endpoint, gate)
+            endpoint_included = set(endpoint_gate.get("cohort", {}).get("included_metric_ids", included))
+            identity_observation = identity_by_metric.get(metric["id"])
+            identity_ok = identity_observation is None or identity_observation["association_eligible"]
+            score = metric["value"] if endpoint_gate.get("scientific_ready") and metric["id"] in endpoint_included and identity_ok else None
             direction = _endpoint_direction(table_name, endpoint)
             weight = _endpoint_weight(table_name, endpoint, state.get("objective", {}))
             confidence = _endpoint_confidence(row, score)
@@ -381,6 +389,8 @@ def build_phenotype_targets(state: ProtocolOptimizingState) -> ProtocolOptimizin
                     "weight": weight,
                     "confidence": confidence,
                     "normalization": "",
+                    "score_policy": "raw_endpoint_primary; normalized_composite_is_cohort_relative_auxiliary",
+                    "analysis_dataset_id": state.get("analysis_dataset", {}).get("id", ""),
                     "normalized_score": None,
                     "objective_score": None,
                     "confounders": _target_confounders(row),
@@ -417,13 +427,13 @@ def join_protocol_phenotypes(state: ProtocolOptimizingState) -> ProtocolOptimizi
     return {"protocol_phenotype_rows": rows}
 
 
-def score_counterfactual_protocol(state: ProtocolOptimizingState) -> ProtocolOptimizingState:
+def assess_similar_protocol_reference(state: ProtocolOptimizingState) -> ProtocolOptimizingState:
     new_features = state.get("new_protocol_features", {})
     if not new_features:
         report: dict[str, Any] = {
-            "schema_version": "counterfactual-protocol-prediction-v1",
+            "schema_version": "similar-protocol-reference-v1",
             "status": "not_requested",
-            "prediction_policy": "similar-protocol reference only; no intervention outcome model fitted",
+            "reference_policy": "similar-protocol reference only; no intervention outcome model fitted",
             "nearest_protocols": [],
         }
     else:
@@ -435,9 +445,9 @@ def score_counterfactual_protocol(state: ProtocolOptimizingState) -> ProtocolOpt
         }
         neighbor_scores = _neighbor_scores(nearest, numeric_scores)
         report = {
-            "schema_version": "counterfactual-protocol-prediction-v1",
+            "schema_version": "similar-protocol-reference-v1",
             "status": "similar_protocol_reference_scored",
-            "prediction_policy": "similar-protocol reference only; not a causal or supervised prediction model",
+            "reference_policy": "similar-protocol reference only; not a causal or supervised prediction model",
             "relative_assessment": _relative_label(neighbor_scores),
             "confidence": "low" if len(neighbor_scores) < 3 else "medium",
             "nearest_protocols": nearest,
@@ -445,5 +455,8 @@ def score_counterfactual_protocol(state: ProtocolOptimizingState) -> ProtocolOpt
             "feature_coverage": _nearest_feature_coverage(nearest),
             "out_of_distribution": _nearest_out_of_distribution(nearest),
             "uncertainty_drivers": _uncertainty_drivers(state, len(neighbor_scores)),
+            "observed_endpoint_references": [row for row in state.get("endpoint_rows", [])
+                if row["protocol_id"] in {neighbor["protocol_id"] for neighbor in nearest}],
+            "candidate_outcome_estimate": None,
         }
-    return {"prediction_report": report}
+    return {"reference_report": report}

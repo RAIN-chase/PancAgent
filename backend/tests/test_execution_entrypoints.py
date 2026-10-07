@@ -16,7 +16,8 @@ def test_public_execution_entrypoints_remain_stable() -> None:
     assert set(migrated["cli"]) == set(expected["cli"])
     for filename in ("langgraph.json", "langgraph.authenticated.json"):
         config = json.loads((root / filename).read_text(encoding="utf-8"))
-        assert config["graphs"] == migrated["graphs"]
+        assert config["graphs"] == {name: target for name, target in migrated["graphs"].items()
+                                    if name != "protocol_chat"}
         for target in config["graphs"].values():
             path, symbol = target.split(":")
             assert (root / path).is_file() and symbol == "graph"
@@ -28,9 +29,13 @@ def test_public_execution_entrypoints_remain_stable() -> None:
     for target in registered.values():
         module, function = target.split(":")
         assert callable(getattr(import_module(module), function))
-    routes = {route.path: sorted(route.methods) for route in create_app().routes
+    routes = {route.path: sorted(route.methods) for route in create_app(enable_experimental_feedback=False).routes
               if route.path.startswith(("/protocol-", "/scientific/")) or route.path == "/health"}
-    assert routes == expected["api"]
+    assert routes == {path: methods for path, methods in expected["api"].items()
+                      if path != "/protocol-query/chat" and not path.startswith("/scientific/")}
+    enabled = {route.path: sorted(route.methods) for route in create_app(enable_experimental_feedback=True).routes
+               if route.path.startswith(("/protocol-", "/scientific/")) or route.path == "/health"}
+    assert enabled == {path: methods for path, methods in expected["api"].items() if path != "/protocol-query/chat"}
     variables = [line.split("=", 1)[0] for line in (root / ".env.example").read_text(encoding="utf-8").splitlines()
                  if line and not line.startswith("#") and "=" in line]
-    assert variables == expected["environment_variables"]
+    assert variables == [*expected["environment_variables"], "PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED"]

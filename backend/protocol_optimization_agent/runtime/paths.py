@@ -12,6 +12,8 @@ def optimization_code_paths() -> dict[str, str]:
         *sorted((PACKAGE_ROOT / "analysis/optimization").rglob("*.py")),
         PACKAGE_ROOT / "analysis/phenotype/representation.py",
         PACKAGE_ROOT / "agents/protocol_optimizing.py",
+        PACKAGE_ROOT / "runtime/literature.py",
+        PACKAGE_ROOT / "runtime/llm_client.py",
         *(
             PACKAGE_ROOT / "science" / filename
             for filename in ("dataset.py", "identity.py", "models.py", "state.py", "ingestion.py")

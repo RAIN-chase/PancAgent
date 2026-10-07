@@ -167,11 +167,7 @@ def inspect_result(
     if status not in SUCCESS_STATUSES:
         gaps.append("action_result:" + (status or "missing_status"))
     if action_id.startswith("phenotype."):
-        operation = {
-            "phenotype.cell_composition": "cell_type_composition",
-            "phenotype.gene_expression": "gene_expression",
-            "phenotype.differential_expression": "differential_expression",
-        }.get(action_id)
+        operation = get_action(action_id).operation
         validity = result.get("validation", {}).get("task_validity", {}).get(operation)
         if not validity or not validity.get("valid"):
             gaps.append("requested_task_validation_failed")
@@ -189,6 +185,7 @@ def inspect_result(
         "feature_diff": "feature_differences" in payload,
         "factor_diff": "factor_diff" in payload,
         "stage_diff": "stage_diff" in payload,
+        "event_step_diff": "event_step_diff" in payload,
         "numeric_results": "result_preview" in result,
         "phenotype_ir": "phenotype_ir" in result,
         "versioned_world_model": "schema_version" in protocol_result,
@@ -230,6 +227,7 @@ def inspect_result(
                     "scientific_state",
                     "evaluated_at",
                     "timestamp_utc",
+                    "retrieved_at_utc",
                     "match_score",
                     "matched_tokens",
                 }

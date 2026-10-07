@@ -18,6 +18,10 @@ from protocol_optimization_agent.science.state import ScientificWorldModel
 def test_only_canonical_modules_are_importable() -> None:
     mapping = json.loads((PROJECT_ROOT / "evals/architecture_baseline/module_relocations.json").read_text(encoding="utf-8"))
     for old, new in mapping.items():
+        if new in {"agents.protocol_chat", "interfaces.langgraph_server"}:
+            assert find_spec(f"protocol_optimization_agent.{new}") is None
+            assert find_spec(f"protocol_optimization_agent.{old}") is None
+            continue
         assert import_module(f"protocol_optimization_agent.{new}")
         if old == "runtime":
             assert not hasattr(import_module("protocol_optimization_agent.runtime"), "RunContext")
@@ -63,10 +67,44 @@ from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysi
 from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
 from protocol_optimization_agent.agents.protocol_optimizing import ProtocolOptimizingAgent
 from protocol_optimization_agent.science.state import ScientificWorldModel
+from protocol_optimization_agent.agents.orchestrator import build_orchestrator_graph
+from protocol_optimization_agent.interfaces.api import create_app
+create_app(enable_experimental_feedback=False)
 assert not any(name.startswith('protocol_optimization_agent.extensions') for name in sys.modules)
-assert 'protocol_optimization_agent.interfaces.api' not in sys.modules
 """
     subprocess.run([sys.executable, "-c", code], cwd=PROJECT_ROOT, check=True, capture_output=True, text=True)
+
+
+def test_orchestrator_contains_no_domain_tools_or_calculations() -> None:
+    source = (PACKAGE_ROOT / "agents/orchestrator.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert not (node.module or "").startswith("protocol_optimization_agent.analysis"), node.module
+            assert node.module not in {
+                "protocol_optimization_agent.agents.protocol_analysis",
+                "protocol_optimization_agent.agents.data_analysis",
+                "protocol_optimization_agent.agents.protocol_optimizing",
+            }
+    functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    assert not {"protocol_analysis_agent", "data_analysis_agent", "protocol_optimizing_agent",
+                "_filter_data_result_rows", "_optimization_cache_key"}.intersection(functions)
+    for filename in ("langgraph.json", "langgraph.authenticated.json"):
+        config = json.loads((PROJECT_ROOT / filename).read_text(encoding="utf-8"))
+        assert set(config["graphs"]) == {"orchestrator"}
+
+
+def test_experimental_api_is_disabled_by_default_and_explicitly_enabled(monkeypatch) -> None:
+    from protocol_optimization_agent.interfaces.api import create_app
+    monkeypatch.delenv("PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED", raising=False)
+    default_paths = {route.path for route in create_app().routes}
+    assert "/protocol-query/chat" not in default_paths
+    assert not any(path.startswith("/scientific/experiments/") for path in default_paths)
+    enabled_paths = {route.path for route in create_app(enable_experimental_feedback=True).routes}
+    assert "/scientific/experiments/review" in enabled_paths
+    monkeypatch.setenv("PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED", "1")
+    assert {route.path for route in create_app().routes} == enabled_paths
+    assert {route.path for route in create_app(enable_experimental_feedback=False).routes} == default_paths
 
 
 def test_root_and_cache_paths_point_to_actual_implementations(tmp_path: Path) -> None:

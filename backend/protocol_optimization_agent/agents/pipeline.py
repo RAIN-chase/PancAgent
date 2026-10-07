@@ -103,6 +103,7 @@ class ProtocolOptimizationAgent:
         agent = ProtocolOptimizingAgent(
             self.config.output_dir / "protocol_optimization",
             objective=self.config.optimization_objective,
+            llm_client=build_llm_client(self.config.llm),
         )
         protocol_dir = state.protocol_outputs["protocol_feature_matrix"].parent
         h5ad_dir = state.h5ad_outputs["h5ad_summary_by_protocol"].parent

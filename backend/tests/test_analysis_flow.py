@@ -96,7 +96,7 @@ def test_duplicate_call_stops_without_second_execution(tmp_path, monkeypatch):
     assert result["messages"][-1].additional_kwargs["analysis_report"]["stop_reason"] == result["stop_reason"]
 
 
-@pytest.mark.parametrize("action_id", ["protocol.extract", "phenotype.beta_maturity", "phenotype.reference_similarity"])
+@pytest.mark.parametrize("action_id", ["protocol.extract", "phenotype.reference_similarity"])
 def test_unimplemented_actions_are_not_executed(tmp_path, monkeypatch, action_id):
     state = inputs(tmp_path)
     required = {key: "dummy" for key in get_action(action_id).required_inputs}

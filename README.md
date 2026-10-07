@@ -10,6 +10,8 @@ The framework is intentionally small: three domain agents plus one lightweight o
 
 The primary `orchestrator` graph now follows a validated plan, task-specific evidence checks, bounded revision and deterministic report synthesis. Plans, step results, stopping reasons and saved numeric bindings are visible in the existing chat UI. See [planned scientific analysis](docs/planned_scientific_analysis.md) for contracts, statistical boundaries and regression commands.
 
+The [thin Orchestrator refactor](docs/thin_orchestrator_refactor.md) documents domain tool ownership, retired PA-only interfaces and explicitly enabled experimental-feedback APIs.
+
 Scientific state, Phenotype IR, registered actions, next-experiment selection and researcher feedback commands are documented in [docs/scientific_world_model.md](docs/scientific_world_model.md). PA's future `Protocol_extraction` workflow integration and final intervention IR design are deferred.
 
 Candidate approvals bind evaluation versions; reviewed feedback can enter immutable quantitative datasets. Multi-user identity, project permissions and artifact access require the [authenticated deployment profile](docs/authenticated_deployment.md); the default local profile is not a multi-user security boundary.
@@ -28,7 +30,6 @@ backend/
     science/                # Scientific identities, records, datasets and history
     runtime/                # Context, authorization, archives, models, configuration and IO
     interfaces/             # HTTP API, LangGraph Server, authentication adapters and CLI
-      langgraph_server.py   # PA-only conversation: protocol_chat
     extensions/experimental_feedback/ # Explicit review, execution and feedback lifecycle
     schemas.py              # Analysis input/output contracts
     state.py                # Batch execution state
@@ -68,8 +69,8 @@ export_results
 Core agents:
 
 - `ProtocolAnalysisAgent`: reads Agent1 evidence-grounded artifacts and summarizes protocol / stage / factor differences.
-- `DataAnalysisAgent`: reads the h5ad manifest and runs pluggable data analysis tools. The initial implementation emits manifest-based structured placeholders when h5ad dependencies or input files are unavailable.
-- `ProtocolOptimizingAgent`: integrates protocol variables and single-cell phenotype summaries into evidence-labeled optimization hypotheses and protocol recommendations.
+- `DataAnalysisAgent`: runs fixed input/validation/archive safeguards and only explicitly selected `requested_tasks`; default is metadata `summary`. Interactive and batch analyses share the same operations. See [task-driven DA execution](docs/data_analysis_task_execution.md). Missing inputs and unavailable methods do not produce fabricated metrics.
+- `ProtocolOptimizingAgent`: connects sample-level raw phenotypes and version-bound PA interventions, checks study sensitivity, and proposes competing falsifiable hypotheses. Optional literature/model budgets default to zero; composite scores are auxiliary, not absolute quality or success probabilities. See [PO scientific evidence](docs/po_scientific_evidence.md).
 
 Optimization orchestration is explicit: `ProtocolOptimizingAgent` consumes audited Protocol/Data Agent outputs. If protocol or data inputs need reinterpretation, rerun the corresponding upstream agent first; the Orchestrator reports `upstream_rerun_required` instead of optimizing from incomplete PA/DA outputs.
 
@@ -78,7 +79,6 @@ Optimization orchestration is explicit: `ProtocolOptimizingAgent` consumes audit
 | Entry | Purpose | Implementation |
 | --- | --- | --- |
 | `orchestrator` | Main conversation and SubAgent dispatch | `agents/orchestrator.py:graph` |
-| `protocol_chat` | Optional PA-only protocol queries | `interfaces/langgraph_server.py:graph` |
 | `protocol-optimization-agent --config configs/run_config.json` | Reproducible PA -> DA -> PO batch | `agents/pipeline.py` through `interfaces/cli.py` |
 
 Each domain agent executes its own internal LangGraph `StateGraph`. The unused
@@ -86,8 +86,8 @@ no-op `workflow.py` skeleton has been removed; it was not an executable analysis
 
 Architecture simplification is recorded in [steps 1-3](docs/architecture_simplification_steps_1_3.md)
 and [steps 4-8](docs/architecture_simplification_steps_4_8.md), alongside a frozen scientific baseline.
-Legacy module paths forward to the same implementations; removal requires a documented
-breaking release after downstream callers migrate. Internal code uses the new paths.
+Legacy import aliases and the PA-only conversation have been removed. Use canonical
+module paths and the single `orchestrator` conversation entrypoint.
 
 ```python
 from protocol_optimization_agent.agents.pipeline import ProtocolOptimizationAgent
@@ -109,22 +109,15 @@ The LangGraph Server entrypoint for `agent-chat-ui` is defined in the root `lang
 ```json
 {
   "graphs": {
-    "orchestrator": "./backend/protocol_optimization_agent/agents/orchestrator.py:graph",
-    "protocol_chat": "./backend/protocol_optimization_agent/interfaces/langgraph_server.py:graph"
+    "orchestrator": "./backend/protocol_optimization_agent/agents/orchestrator.py:graph"
   }
 }
 ```
 
-The server graph exposes a message-based chat agent with visible tool calls:
-
-- `find_protocols`
-- `compare_protocols`
-- `get_protocol_events`
-- `get_feature_evidence`
-- `query_matrix`
-- `explain_cell`
-- `plot_protocol_feature_heatmap`
-- `propose_feature_specs_context`
+The model proposes registered actions through `execute_scientific_action`.
+`agents/actions.py` is the sole capability and availability list. PA/DA/PO own
+their tool adapters, evidence extraction, result filtering and domain cache rules.
+The main graph owns only configuration, planning, bounded execution, review and finalization.
 
 Start a local/LAN LangGraph server from the repository root:
 
@@ -133,9 +126,8 @@ cd E:\workspace\Pancreas\Agents_test
 .\scripts\start_langgraph_server.ps1 -HostAddress 0.0.0.0 -Port 2024 -OutputDir "runs\protocol_analysis_agent_simplified_autofeatures"
 ```
 
-Then connect `agent-chat-ui` to the LangGraph server and select `orchestrator` for
-normal use, or `protocol_chat` for PA-only queries. Both accept standard chat
-`messages` and stream LLM/tool/answer updates.
+Then connect `agent-chat-ui` to the LangGraph server using `orchestrator`.
+It accepts standard chat `messages` and streams plan/tool/answer updates.
 
 For LAN access, do not use `0.0.0.0` in the browser or frontend env. Use the machine LAN IP, for example:
 
@@ -227,6 +219,7 @@ Protocol Analysis Agent outputs:
 
 - `normalized_factor_events.jsonl`: evidence-preserving factor/event normalization with rule, LLM, or fallback provenance.
 - `semantic_stage_annotations.jsonl`: stage-level biological program annotations for differentiation strategy interpretation.
+- `semantic_step_annotations.jsonl` and `step_semantic_audit.json`: source-bound operations, scoped parameters, conditions and conservative step alignment. See [PA step semantics](docs/pa_step_semantics.md) for budgets, retrieval and evidence limits.
 - `protocol_strategy_summary.json`: protocol-level culture system, strategy modules, maturation factors, risks, and confidence.
 - `llm_audit_report.json`: contradiction, duplication, fallback, and evidence-quality findings.
 - `schema_validation_report.json`: Pydantic input validation findings for protocol, stage, and factor-event records.
@@ -263,7 +256,11 @@ Backend API query endpoints:
 
 - `POST /protocol-query/find`
 - `POST /protocol-query/compare`
-- `POST /protocol-query/chat`
+
+Experimental approval and feedback endpoints are disabled by default. Set
+`PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED=1` before starting the backend API to
+enable them with the same authentication and project-permission checks.
+The CLI `protocol-query chat` remains a single deterministic query, not a second conversational agent.
 
 ## Model And API Configuration
 

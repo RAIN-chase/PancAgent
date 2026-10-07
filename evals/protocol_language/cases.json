@@ -1,0 +1,32 @@
+[
+  {
+    "id": "nair-2019-collection-wash-resuspension",
+    "fixture_kind": "source_excerpt_with_developer_labels_not_expert_adjudicated",
+    "source": {"input": "inputs/Protocols inputs/protocols.jsonl", "protocol_id": "protocol_021b0e733672", "paper_id": "nair_2019", "field": "evidence_spans.context_text"},
+    "text": "After 24 hours, the spheres were collected in 50 ml falcon tubes, allowed to settle by gravity, washed once with PBS and resuspended in day 1 media.",
+    "operations": ["collect", "settle", "wash", "resuspend"],
+    "guards": ["dependency", "repeat"]
+  },
+  {
+    "id": "nair-2019-recurring-medium-replacement",
+    "fixture_kind": "source_excerpt_with_developer_labels_not_expert_adjudicated",
+    "source": {"input": "inputs/Protocols inputs/protocols.jsonl", "protocol_id": "protocol_021b0e733672", "paper_id": "nair_2019", "field": "evidence_spans.context_text"},
+    "text": "Media was changed every third day following reaggregation.",
+    "operations": ["replace_medium"],
+    "guards": ["repeat", "dependency"]
+  },
+  {
+    "id": "synthetic-conditional-transition",
+    "fixture_kind": "synthetic",
+    "text": "Culture until PDX1 is detected; transfer cells when compact.",
+    "operations": ["culture", "transfer"],
+    "guards": ["condition"]
+  },
+  {
+    "id": "synthetic-negation-and-novel-operation",
+    "fixture_kind": "synthetic",
+    "text": "Do not add X; optionally fluxify organoids.",
+    "operations": ["add", "unknown"],
+    "guards": ["explicit_negative", "optional"]
+  }
+]

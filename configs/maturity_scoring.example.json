@@ -1,0 +1,17 @@
+{
+  "requested_tasks": ["maturity"],
+  "annotation_cell_type_column": "epi_cell_type",
+  "maturity": {
+    "cell_types": ["Alpha", "Beta", "Delta"],
+    "preprocessing": "counts_normalize_log1p",
+    "counts_layer": "counts",
+    "target_sum": 10000,
+    "n_bins": 25,
+    "ctrl_size": 50,
+    "random_state": 0,
+    "min_target_cells": 20,
+    "min_genes": 5,
+    "chunk_size": 4096,
+    "max_matrix_bytes": 2000000000
+  }
+}

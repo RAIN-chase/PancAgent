@@ -43,7 +43,8 @@ def test_subgraph_topology_matches_executable_graphs() -> None:
             (source, target) for source, target in graph.edges if source in graph.nodes and target in graph.nodes
         }
         assert "export_results" in spec.nodes
-    assert "analysis_execution_planner" in CORE_AGENT_SUBGRAPHS[1].nodes
+    assert "resolve_tasks" in CORE_AGENT_SUBGRAPHS[1].nodes
+    assert "execute_tasks" in CORE_AGENT_SUBGRAPHS[1].nodes
 
 
 def test_rendered_graph_has_distinct_exports_and_artifact_handoffs() -> None:

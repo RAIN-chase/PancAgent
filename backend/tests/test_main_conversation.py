@@ -4,11 +4,12 @@ from pathlib import Path
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from protocol_optimization_agent.agents.orchestrator import build_orchestrator_graph
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
-from protocol_optimization_agent.interfaces.langgraph_server import TOOLS, build_protocol_chat_graph
+from protocol_optimization_agent.analysis.protocol.query_engine import ProtocolQueryEngine
 
 
-def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:
+def test_main_entry_preserves_protocol_comparison_and_evidence(tmp_path: Path) -> None:
     records = [
         {
             "protocol_id": "p1",
@@ -71,7 +72,7 @@ def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:
             "evidence_quote": "T3 was added.",
         },
     ]
-    ProtocolAnalysisAgent(
+    outputs = ProtocolAnalysisAgent(
         output_dir=tmp_path,
         quality_filters={
             "min_protocol_confidence": 0.65,
@@ -80,49 +81,33 @@ def test_langgraph_server_chat_graph_runs_tools(tmp_path: Path) -> None:
         },
     ).run(records, events, [])
 
+
     class ToolCallingFakeModel(FakeMessagesListChatModel):
         def bind_tools(self, tools):
+            assert [tool.name for tool in tools] == ["execute_scientific_action"]
             return self
 
-    fake_model = ToolCallingFakeModel(
-        responses=[
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {"name": "find_protocols", "args": {"query": "Protocol A"}, "id": "call_find_a"},
-                    {"name": "find_protocols", "args": {"query": "Protocol B"}, "id": "call_find_b"},
-                ],
-            ),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "compare_protocols",
-                        "args": {"protocol_id_a": "p1", "protocol_id_b": "p2"},
-                        "id": "call_compare",
-                    }
-                ],
-            ),
-            AIMessage(content="结构化比较：Protocol A 和 Protocol B 的差异已基于工具结果总结。"),
-        ]
-    )
-
-    graph = build_protocol_chat_graph(chat_model=fake_model)
-    result = graph.invoke(
-        {
-            "messages": [HumanMessage(content="Protocol A 和 Protocol B protocols 有什么区别？")],
-            "output_dir": str(tmp_path),
-            "max_features": 20,
-        }
-    )
-
-    tool_names = [message.name for message in result["messages"] if isinstance(message, ToolMessage)]
-    assert tool_names.count("find_protocols") == 2
-    assert "compare_protocols" in tool_names
-    assert "结构化比较" in result["messages"][-1].content
-
-
-def test_langgraph_server_exposes_heatmap_tool() -> None:
-    assert "get_protocol_collection_summary" in [tool.name for tool in TOOLS]
-    assert "plot_protocol_feature_heatmap" in [tool.name for tool in TOOLS]
-    assert "plot_layered_protocol_feature_heatmaps" in [tool.name for tool in TOOLS]
+    model = ToolCallingFakeModel(responses=[
+        AIMessage(content="", tool_calls=[{
+            "name": "execute_scientific_action",
+            "args": {"action_id": "protocol.compare", "arguments": {"protocol_id_a": "p1", "protocol_id_b": "p2"}},
+            "id": "compare",
+        }], usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
+        AIMessage(content="{}", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
+    ])
+    source = outputs["protocol_feature_matrix"].parent
+    expected = ProtocolQueryEngine(source).compare_protocols("p1", "p2", 20)
+    result = build_orchestrator_graph(model).invoke({
+        "messages": [HumanMessage(content="Compare Protocol A and Protocol B")],
+        "protocol_output_dir": str(source), "data_analysis_output_dir": str(tmp_path / "missing_da"),
+        "optimization_output_dir": str(tmp_path / "missing_po"),
+        "workspace_root": str(tmp_path), "max_features": 20,
+    })
+    import json
+    tool_messages = [message for message in result["messages"] if isinstance(message, ToolMessage)]
+    assert [message.name for message in tool_messages] == ["protocol_analysis_agent"]
+    actual = json.loads(tool_messages[0].content)
+    assert actual["result_preview"]["tool_result"] == expected
+    assert actual["evidence_refs"]
+    assert result["stop_reason"] == "completed"
+    assert "Protocol Analysis Agent" in result["messages"][-1].content

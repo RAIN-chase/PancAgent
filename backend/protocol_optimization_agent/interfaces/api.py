@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
@@ -11,18 +12,15 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from protocol_optimization_agent.agents.protocol_analysis import ProtocolAnalysisAgent
-from protocol_optimization_agent.agents.protocol_chat import ProtocolChatAgent
 from protocol_optimization_agent.analysis.protocol.input_loader import (
     PROTOCOL_INPUT_FILENAME,
     load_protocol_analysis_inputs,
 )
 from protocol_optimization_agent.analysis.protocol.query_engine import ProtocolQueryEngine
-from protocol_optimization_agent.extensions.experimental_feedback import lifecycle
 from protocol_optimization_agent.runtime.access_control import AccessPolicy, authenticated_mode, forbid_client_paths
 from protocol_optimization_agent.runtime.archive import RunArchive, fingerprint
 from protocol_optimization_agent.runtime.context import RunContext
 from protocol_optimization_agent.runtime.llm_client import build_llm_client
-from protocol_optimization_agent.science.models import ExperimentFeedback, FeedbackAdmission
 from protocol_optimization_agent.science.state import ScientificWorldModel
 
 _request_identity: ContextVar[str | None] = ContextVar("request_identity", default=None)
@@ -132,33 +130,7 @@ class ProtocolCompareRequest(ProjectRequest):
     max_features: int = 40
 
 
-class ProtocolChatRequest(ProjectRequest):
-    output_dir: str = Field(default="runs/protocol_analysis_agent_api")
-    question: str
-    max_features: int = 30
-    llm: dict[str, Any] = Field(default_factory=lambda: {"provider": "offline"})
-
-
-class ExperimentReviewRequest(ProjectRequest):
-    experiment_id: str
-    evaluation_id: str
-    approve: bool
-    reason: str
-
-
-class ExperimentPerformedRequest(ProjectRequest):
-    experiment_id: str
-
-
-class ExperimentFeedbackRequest(ProjectRequest):
-    feedback: ExperimentFeedback
-
-
-class FeedbackAdmissionRequest(ProjectRequest):
-    admission: FeedbackAdmission
-
-
-def create_app() -> Any:
+def create_app(*, enable_experimental_feedback: bool | None = None) -> Any:
     try:
         from fastapi import FastAPI
     except ImportError as exc:
@@ -260,48 +232,12 @@ def create_app() -> Any:
         )
         return result
 
-    @app.post("/protocol-query/chat")
-    @archived_request
-    def chat_protocol_query(request: ProtocolChatRequest) -> dict[str, Any]:
-        if authenticated_mode() and "llm" in request.model_fields_set:
-            raise PermissionError("LLM configuration is server-owned in authenticated mode.")
-        return ProtocolChatAgent(
-            _request_path(request, "output_dir", "write"), llm_client=build_llm_client(request.llm)
-        ).answer(
-            request.question,
-            max_features=request.max_features,
-        )
+    enabled = (os.getenv("PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED") == "1"
+               if enable_experimental_feedback is None else enable_experimental_feedback)
+    if enabled:
+        from protocol_optimization_agent.extensions.experimental_feedback.api import register_routes
 
-    @app.post("/scientific/experiments/review")
-    def review_experiment(request: ExperimentReviewRequest):
-        store = _request_store(request)
-        return lifecycle.review(
-            store,
-            request.experiment_id,
-            request.approve,
-            store.context.user_id,
-            request.reason,
-            evaluation_id=request.evaluation_id,
-        )
-
-    @app.post("/scientific/experiments/performed")
-    def performed_experiment(request: ExperimentPerformedRequest):
-        store = _request_store(request)
-        return lifecycle.mark_performed(store, request.experiment_id, store.context.user_id)
-
-    @app.post("/scientific/experiments/feedback")
-    def record_feedback(request: ExperimentFeedbackRequest):
-        store = _request_store(request)
-        if request.feedback.researcher != store.context.user_id:
-            raise PermissionError("Feedback researcher must match request identity.")
-        return lifecycle.record_feedback(store, request.feedback)
-
-    @app.post("/scientific/experiments/admit-feedback")
-    def admit_feedback(request: FeedbackAdmissionRequest):
-        store = _request_store(request)
-        if request.admission.researcher != store.context.user_id:
-            raise PermissionError("Admission researcher must match request identity.")
-        return lifecycle.admit_feedback(store, request.admission)
+        register_routes(app, _request_store)
 
     return app
 

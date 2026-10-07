@@ -1,6 +1,6 @@
 # 有计划的科学分析流程
 
-更新日期：2026-10-06。主入口仍为 LangGraph 图 `orchestrator`；`protocol_chat` 仍是 PA 专用入口。没有新增 Agent，也没有接入尚待确定的 Protocol_extraction workflow 或最终干预 IR。
+更新日期：2026-10-06。唯一对话入口为 LangGraph 图 `orchestrator`；PA 专用聊天图与聊天 API 已删除。没有新增 Agent，也没有接入尚待确定的 Protocol_extraction workflow 或最终干预 IR。
 
 ## 执行与停止
 
@@ -51,7 +51,7 @@ configure -> plan -> execute -> review
 | `hypothesis.generate` | 可证伪假设、反对证据、替代解释、适用条件与未知预期幅度 | 草案，不审批、不执行；证据指针未经额外验证时不视为已确认引用 |
 | `experiment.propose` | 仅消费已保存的 PA/DA 结果；上游依赖由 Orchestrator 调度 | 科学门槛仍严格；无法选实验不影响独立假设生成 |
 
-成熟度、参考相似度仍为 `partial`；协议提取仍为 `deferred`。注册表中的 available 表示有可调用实现，不意味着所有数据都满足科学前提。
+成熟度已接入 counts → normalize_total(1e4) → log1p → Scanpy Early/Late 模块分数工具，支持 Alpha、Beta、Delta，详见 [成熟度工具](maturity_scoring_tool.md)。参考相似度仍为 `partial`；协议提取仍为 `deferred`。注册表中的 available 表示有可调用实现，不意味着所有数据都满足科学前提。
 
 ## DA 统计边界
 
@@ -129,7 +129,7 @@ pnpm exec tsc --noEmit
 
 删除根目录转发模块、旧 `tools/` 与 `visualization/` 转发、批处理 `orchestrator.py` 别名、`scientific_reasoning.py` 聚合转发及 `runtime/__init__.py` 符号重导出。仅保留规范模块路径；历史迁移映射仍保存在 `evals/architecture_baseline/module_relocations.json` 供查阅。外部 Python 调用方也需据此修改导入。
 
-例如 `from protocol_optimization_agent.runtime import RunContext` 改为 `from protocol_optimization_agent.runtime.context import RunContext`；批处理类从 `agents.pipeline` 导入，聊天图从 `agents.orchestrator` 导入。CLI 命令名、API 路由、LangGraph 的 `orchestrator` / `protocol_chat` 图 ID 不变。旧 `python -m protocol_optimization_agent.cli` 不再支持，应使用命令 `protocol-optimization-agent` 或规范模块 `interfaces.cli`。
+例如 `from protocol_optimization_agent.runtime import RunContext` 改为 `from protocol_optimization_agent.runtime.context import RunContext`；批处理类从 `agents.pipeline` 导入，聊天图从 `agents.orchestrator` 导入。CLI 命令名与 `orchestrator` 图 ID 保持不变。`protocol_chat` 图与 `/protocol-query/chat` 已删除；实验审批与反馈 API 默认关闭，显式启用后保留原路由。旧 `python -m protocol_optimization_agent.cli` 不再支持，应使用命令 `protocol-optimization-agent` 或规范模块 `interfaces.cli`。
 
 仅向模型绑定 `execute_scientific_action`；能力描述与离线路由来自 Action Registry。旧直接工具提议、`describe_subagents` 与重复工具列表已删除。PA/DA/PO 仅执行各自领域任务，固定计算图不包含自主规划回路；PO 不再接受原始 PA/DA 输入，也不在内部触发上游 Agent。缺少协议提取工作流时明确停止，不把协议评估当作协议编译替代品。
 

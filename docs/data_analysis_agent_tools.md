@@ -17,7 +17,7 @@ Manifest rows describe logical cell subsets, not physical files. Multiple rows m
 
 ## Execution Paths And Quality Gate
 
-`analysis_mode=standard` is the default. It uses the fixed, versioned tools below. `analysis_mode=exploratory` additionally accepts an `exploratory_analysis` bundle containing generated `script`, `environment`, `config`, `diagnostics`, and deterministic `validation_checks`. Generated code must run in an external sandbox; the Data Analysis Agent archives but does not execute arbitrary code in its main process.
+`analysis_mode=standard` is the default. The control graph supplies fixed safeguards; `requested_tasks` selects which versioned operations execute. Default: `summary` only. Query genes, marker sets, DE options or gene programs do not implicitly schedule other tasks. `analysis_mode=exploratory` additionally accepts a sandbox-generated reproducibility bundle, without expanding the requested task list or executing arbitrary code in DA. See [task-driven execution and migration](data_analysis_task_execution.md).
 
 Every run writes `data_analysis_validation.json`, separating `technical_qc`, `task_validity`, `metric_status` and `statistical_applicability`. Valid composition does not require maturity/reference calculations. Validation schema v2 removes the global `po_ready` flag. Protocol Optimizing checks technical QC plus task validity for explicit optimization endpoints (maturity by default); unrelated metric failures do not veto a valid task. Old v1 validation snapshots require rerunning DA. Task checks include:
 
@@ -65,11 +65,11 @@ Downloaded external sources:
 | `query_gene_expression` | implemented | `gene_expression_summary.csv` |
 | `differential_expression` | implemented | `differential_expression.csv` |
 | `marker_score_analysis` | implemented | `marker_scores.csv` |
-| `gene_program_maturity_score` | stub pending implementation | `maturity_scores.csv`, `gene_program_scores.csv` |
-| `reference_similarity` | stub pending implementation | `similarity_scores.csv` |
-| `regulatory_program_placeholder` | stub pending external tool | `regulatory_program_scores.csv` |
-| `trajectory_placeholder` | stub pending external tool | `trajectory_scores.csv` |
-| `external_tool_inventory` | implemented | `external_tool_inventory.csv` |
+| gene-program mean expression | implemented, not reference-calibrated maturity | `gene_program_scores.csv` |
+| `gene_program_maturity_score` | implemented; notebook Early/Late Scanpy scores from counts | `maturity_scores.csv`, `maturity_cells_*.csv`, `maturity_audit.json` when requested |
+| `reference_similarity` | partial, unavailable for default execution | validation only; no placeholder metric file |
+| GRN / trajectory wrappers | optional, numeric implementation pending | no default placeholder metric file |
+| external tool discovery | optional, explicit wrapper calls | no default directory/dependency scan |
 
 ## First-Pass h5ad Execution
 
@@ -176,7 +176,7 @@ These tools can be added to the local tools registry as wrappers instead of bein
 ## Minimum Next Implementation Order
 
 1. Implement `scanpy_h5ad_profile_tool` for real h5ad loading, obs/var audit, composition, QC, marker scores, and gene program scores.
-2. Upgrade `gene_program_maturity_score` from placeholder maturity rows to reference-normalized lineage maturity scores.
+2. The counts-based `gene_program_maturity_score` is available; see [maturity scoring tool](maturity_scoring_tool.md). Reference calibration remains a separate scientific extension, not a claim of this descriptive delta score.
 3. Implement `reference_similarity` using matched genes and matched cell types with cosine similarity and Euclidean distance on pseudobulk expression and latent embeddings.
 4. Add `scib-metrics` to quantify whether the provided de-batched organoid h5ad preserves cell identity while reducing batch structure.
 5. Add GRN and trajectory wrappers only after the base transcriptomic comparison is reproducible.
@@ -187,24 +187,18 @@ The agent should always export:
 
 - `h5ad_summary_by_protocol.jsonl`
 - `h5ad_qc_report.json`
-- `cell_type_composition.csv`
-- `marker_scores.csv`
-- `gene_program_scores.csv`
-- `gene_expression_summary.csv`
-- `differential_expression.csv`
-- `maturity_scores.csv`
-- `similarity_scores.csv`
-- `regulatory_program_scores.csv`
-- `trajectory_scores.csv`
 - `data_analysis_protocol_summary.csv`
 - `data_analysis_tool_registry.json`
 - `data_analysis_comparison_report.json`
-- `external_tool_inventory.csv`
 - `data_analysis_query_result.json`
 - `h5ad_analysis_limitations.json`
 - `data_analysis_execution_plan.json`
+- `data_analysis_task_results.json`
 - `data_analysis_validation.json`
-- `exploratory/analysis.py`
-- `exploratory/environment.json`
-- `exploratory/config.json`
-- `exploratory/diagnostics.json`
+
+Analysis CSVs are exported only for explicitly selected operations. An unavailable
+method returns a task failure without a fabricated metric table. `gene_program_score`
+reuses the existing marker-mean calculation internally; it does not schedule a
+separate marker task. `exploratory/analysis.py`, `environment.json`, `config.json` and `diagnostics.json`
+are exported only in explicitly selected exploratory mode. Maturity/reference/GRN/
+trajectory placeholder files are no longer part of the default output contract.

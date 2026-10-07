@@ -10,7 +10,6 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from protocol_optimization_agent.agents.orchestrator import build_orchestrator_graph
-from protocol_optimization_agent.interfaces.langgraph_server import build_protocol_chat_graph
 from protocol_optimization_agent.runtime.access_control import (
     AccessPolicy,
     configure_authenticated_state,
@@ -82,18 +81,17 @@ def test_server_identity_project_and_artifacts_fail_closed(policy, tmp_path: Pat
         ScientificWorldModel(reader, "study").put([Hypothesis(id="h", statement="x", feature="x", objective="y")], "S4")
 
 
-def test_both_graph_entries_require_authenticated_server_runtime(policy) -> None:
+def test_main_graph_requires_authenticated_server_runtime(policy) -> None:
     class ToolModel(FakeMessagesListChatModel):
         def bind_tools(self, tools):
             return self
 
-    for builder in (build_orchestrator_graph, build_protocol_chat_graph):
-        graph = builder(ToolModel(responses=[AIMessage(content="done")]))
-        state = {"project_id": "study", "messages": [HumanMessage(content="hello")]}
-        with pytest.raises(PermissionError, match="identity"):
-            graph.invoke(state)
-        result = graph.invoke(state, {"configurable": {"langgraph_auth_user": {"identity": "alice"}}})
-        assert result["user_id"] == "alice"
+    graph = build_orchestrator_graph(ToolModel(responses=[AIMessage(content="done")]))
+    state = {"project_id": "study", "messages": [HumanMessage(content="hello")]}
+    with pytest.raises(PermissionError, match="identity"):
+        graph.invoke(state)
+    result = graph.invoke(state, {"configurable": {"langgraph_auth_user": {"identity": "alice"}}})
+    assert result["user_id"] == "alice"
 
 
 def test_fastapi_authentication_path_and_approval_identity(policy) -> None:
@@ -101,7 +99,7 @@ def test_fastapi_authentication_path_and_approval_identity(policy) -> None:
     from fastapi.testclient import TestClient
     from protocol_optimization_agent.interfaces.api import create_app
 
-    client = TestClient(create_app())
+    client = TestClient(create_app(enable_experimental_feedback=True))
     payload = {"project_id": "study", "output_artifact_id": "pa", "query": "A"}
     headers = {"Authorization": "Bearer alice_test_token"}
     assert client.post("/protocol-query/find", json=payload).status_code == 401

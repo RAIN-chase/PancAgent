@@ -31,7 +31,6 @@ backend/
     agents/
       orchestrator.py             # Main conversational graph and SubAgent dispatch
       actions.py                  # Versioned biomedical action registry
-      protocol_chat.py            # PA conversational agent
       protocol_analysis.py        # Implemented Protocol Analysis Agent
       data_analysis.py            # Data Analysis Agent framework and h5ad-compatible output contracts
       protocol_optimizing.py      # Protocol Optimizing Agent framework and optimization output contracts
@@ -45,7 +44,6 @@ backend/
     runtime/                     # Context, archives, authorization, model calls, config, IO and paths
     interfaces/                  # HTTP API, LangGraph Server, auth adapter and unchanged CLI commands
     extensions/experimental_feedback/ # Explicit approval, execution records, feedback and admission
-    orchestrator.py               # Legacy batch class import only; no separate implementation
     schemas.py                    # Pydantic schemas
     subgraphs.py                  # Executable graph topology plus scientific labels and Mermaid rendering
   tests/
@@ -72,7 +70,7 @@ docs/
 ## Execution Entrypoints
 
 - `orchestrator`: primary conversational graph in `agents/orchestrator.py`.
-- `protocol_chat`: optional PA-only conversational graph in `interfaces/langgraph_server.py`.
+- The former PA-only conversation and chat API were removed; protocol-only questions use the same Orchestrator and call PA alone.
 - `protocol-optimization-agent --config <config.json>`: deterministic batch execution in `agents/pipeline.py`, through the unchanged CLI command.
 - The unused no-op `workflow.py` and uncalled `tools/scoring.py` adapters have been removed. Actual maturity/reference computation status is unchanged.
 - PA reports and deterministic queries share feature group rules. `ordered_reagent_program` now belongs to `workflow` in both; numerical values, units and evidence are unchanged.
@@ -91,7 +89,7 @@ agent-chat-ui frontend
   ↓
 LangGraph Server
   ↓
-Chat / Orchestrator graph
+Orchestrator graph
   ↓
 Agent tools and deterministic local query tools
 ```
@@ -105,14 +103,11 @@ Current frontend:
 Current backend:
 
 - Provides local FastAPI endpoints for direct API operations.
-- Provides LangGraph Server graphs `orchestrator` (primary) and `protocol_chat` (PA-only).
+- Provides only the `orchestrator` conversational graph; domain agents own their tool adapters.
 - Uses deterministic tools for protocol retrieval, comparison, matrix querying, provenance lookup, and heatmap generation.
 
 Current LangGraph graphs:
 
-- `protocol_chat` is exposed in `langgraph.json`.
-- It streams LLM responses and visible tool calls.
-- It currently routes to Protocol Analysis query tools.
 - `orchestrator` is exposed in `langgraph.json`.
 - It routes user questions to callable SubAgent tools for Protocol Analysis, Data Analysis, and Protocol Optimizing workflows.
 
@@ -169,13 +164,15 @@ Routing examples:
 Current implementation status:
 
 - Protocol Analysis Agent: implemented.
-- Data Analysis Agent: deterministic standard path, audited exploratory artifact path, and PO readiness gate implemented; maturity and reference similarity remain pending numeric tools.
+- Data Analysis Agent: deterministic standard path, audited exploratory artifact path, and per-task optimization validation implemented. Alpha/Beta/Delta counts-based Early/Late maturity scores are available; reference similarity remains pending. See [maturity scoring tool](maturity_scoring_tool.md).
 - Protocol Optimization Agent: framework implemented through `ProtocolOptimizingAgent`; recommendations are evidence-labeled hypotheses, not causal claims.
 - External Orchestrator Agent: framework implemented as a LangGraph entrypoint with structured request envelopes, cache/readiness checks, scoped runtime context, and optional upstream SubAgent execution when structured inputs are provided.
 
 ## Protocol Analysis Agent
 
 The Protocol Analysis Agent is the first implemented domain agent. It consumes Agent1 structured outputs and builds a Protocol Intelligence Layer.
+
+The existing semantic node additionally exports source-bound step annotations and their audit, without feeding model-generated quantities into the matrix compiler. `protocol.steps` retrieves these persisted annotations; comparison includes conservative operation alignment, context/guard differences and order inversions. See [PA step semantics](pa_step_semantics.md) for the input contract, model budget and validation limits.
 
 ### Inputs
 
@@ -455,12 +452,12 @@ runs/protocol_analysis_agent_simplified_autofeatures/visualizations/layered_prot
 
 ## Data Analysis Agent
 
-The Data Analysis Agent quantifies organoid h5ad datasets against in vivo reference atlases. It uses verified deterministic tools first and reserves generated code for an explicitly selected exploratory path. The first-pass anndata-backed tools cover h5ad inspection, cell type composition, marker/gene program scoring, target-gene expression summaries, and lightweight differential expression. Methods that require heavier modeling, including reference latent mapping, GRN inference, and trajectory modeling, remain wrapper-backed placeholders until their runtime dependencies and reference resources are configured.
+The Data Analysis Agent uses deterministic tools for h5ad inspection, cell type composition, marker/gene program scoring, target-gene expression summaries, exploratory differential expression and Alpha/Beta/Delta Early/Late maturity scoring. Reference mapping remains partial; GRN and trajectory wrappers remain optional. Unavailable methods do not emit placeholder metrics.
 
 Execution paths:
 
-- `standard` (default): fixed tools and declared expression/sample/group contracts.
-- `exploratory`: keeps the standard baseline and archives sandbox-generated code, environment, configuration, diagnostics, and deterministic validation checks. The Data Analysis Agent does not execute arbitrary generated code in its main process.
+- `standard` (default): fixed safeguards, explicitly selected `requested_tasks`, and declared expression/sample/group contracts. Without a task list, only `summary` runs; supplying analysis options does not implicitly schedule computations.
+- `exploratory`: runs only the same selected operations and additionally archives sandbox-generated code, environment, configuration, diagnostics, and deterministic validation checks. The Data Analysis Agent does not execute arbitrary generated code in its main process.
 
 Both paths end at `data_analysis_validation.json`. Technical QC, per-task metric validity and statistical applicability are separate. Composition and gene-expression tasks do not require maturity/reference scores. Independent-biological-replicate mean comparisons with BH correction remain exploratory; missing design metadata, paired/overlapping units, fully confounded batches or raw counts yield descriptive results only. The optimization gate checks technical QC and task validation for the requested objective endpoints, not a global `po_ready` flag. Unknown or missing endpoint evidence blocks optimization; unrelated failed metrics do not invalidate a usable task. Validation v1 snapshots must be regenerated as v2; file existence or an LLM quality score alone is insufficient. An LLM assessment is qualitative commentary, not a statistical confidence probability.
 
@@ -485,21 +482,15 @@ metadata_config                       # obs column names and matching keys
 
 ```mermaid
 flowchart TD
-  A[data_input_gate] --> P[analysis_execution_planner]
+  A[data_input_gate] --> P[resolve_tasks]
   P --> B[dataset_inventory_builder]
-  B --> C[metadata_and_qc_summary]
-  C --> D[cell_type_composition_analysis]
-  D --> E[marker_and_gene_program_scoring]
-  E --> F[maturity_scoring]
-  F --> G[reference_similarity_analysis]
-  G --> H[regulatory_and_trajectory_placeholders]
-  H --> I[external_tool_inventory]
-  I --> J[aggregate_quantitative_comparison]
-  J --> K[data_analysis_audit]
-  K --> L[export_results]
+  B --> E[execute_tasks]
+  E --> K[data_analysis_audit]
+  K --> R[phenotype_representation]
+  R --> L[export_results]
 ```
 
-The manifest is logical rather than file-based: multiple rows may reference the same h5ad and select different cell subsets through `dataset_column`, `sample_column`, `condition_column`, and `protocol_column`. This supports both one-file-per-dataset inputs and a future combined organoid h5ad without changing the analysis tools.
+The manifest is logical rather than file-based: multiple rows may reference the same h5ad and select different cell subsets through `dataset_column`, `sample_column`, `condition_column`, and `protocol_column`. Orchestrator alone decides which analysis to run next. DA deterministically resolves operations, checks dependencies, executes them and returns task-specific outcomes; it has no autonomous replanning loop. See [task-driven DA execution](data_analysis_task_execution.md).
 
 Current outputs:
 
@@ -511,25 +502,17 @@ marker_scores.csv
 gene_program_scores.csv
 gene_expression_summary.csv
 differential_expression.csv
-maturity_scores.csv
-similarity_scores.csv
-regulatory_program_scores.csv
-trajectory_scores.csv
-external_tool_inventory.csv
 data_analysis_protocol_summary.csv
 data_analysis_tool_registry.json
 data_analysis_comparison_report.json
 data_analysis_query_result.json
 h5ad_analysis_limitations.json
 data_analysis_execution_plan.json
+data_analysis_task_results.json
 data_analysis_validation.json
-exploratory/analysis.py
-exploratory/environment.json
-exploratory/config.json
-exploratory/diagnostics.json
 ```
 
-The h5ad implementation avoids default dense full-matrix conversion. It reads metadata in backed mode where possible and computes expression statistics by target genes and groups. The maturity scoring and organoid-reference similarity functions are still stable stubs in this iteration; their output schemas reserve slots for lineage gene programs, cosine similarity, and Euclidean distance.
+The analysis CSVs above are exported only for requested tasks; unrequested tasks are marked `not_requested` rather than computed or represented by empty metric files. External tool discovery is optional and not scanned for every query. The h5ad implementation avoids default dense full-matrix conversion. Unavailable methods are explicit in task validation. The `exploratory/` bundle is exported only when exploratory mode is explicitly selected.
 
 ## Protocol Optimizing Agent
 
@@ -550,13 +533,8 @@ protocol_output_dir/
   protocol_feature_provenance.json
 
 data_analysis_output_dir/
-  maturity_scores.csv
-  similarity_scores.csv
-  cell_type_composition.csv
-  marker_scores.csv
-  gene_program_scores.csv
-  regulatory_program_scores.csv
-  trajectory_scores.csv
+  phenotype_ir.json               # Numeric evidence for explicitly selected endpoints
+  data_analysis_validation.json   # Technical QC plus task-specific validity
   data_analysis_protocol_summary.csv
   h5ad_summary_by_protocol.jsonl
 ```
@@ -569,10 +547,11 @@ flowchart TD
   B --> C[protocol_phenotype_joiner]
   C --> D[protocol_phenotype_association_analyzer]
   D --> E[mechanistic_evidence_ranker]
-  E --> F[counterfactual_protocol_scorer]
+  E --> F[similar_protocol_reference]
   F --> G[optimized_protocol_generator]
-  G --> H[optimization_audit]
-  H --> I[export_results]
+  G --> H[experiment_design]
+  H --> I[optimization_audit]
+  I --> J[export_results]
 ```
 
 Current outputs:
@@ -584,7 +563,10 @@ protocol_phenotype_summary.csv
 protocol_phenotype_associations.csv
 optimization_candidate_features.csv
 optimized_protocol_edits.json
-counterfactual_protocol_predictions.json
+joint_evidence.json
+endpoint_associations.json
+mechanism_evidence.json
+similar_protocol_reference.json
 proposed_improved_protocol.json
 proposed_improved_protocol.md
 factor_recommendation_table.csv
@@ -604,7 +586,9 @@ Current optimization behavior:
 - Carries confounder markers such as dataset, paper, cell line, assay, timepoint, batch, condition, and sample when those fields are available.
 - Runs an exploratory Pearson screen only on explicit, scale-compatible endpoint cohorts with actual valid samples and identified biological replicates. The configurable protocol floor is at least three, not a claim of statistical sufficiency; unresolved scientific gates prevent numeric pooling.
 - Falls back to biologically prioritized protocol-feature review when numeric phenotype outputs are pending.
-- Ranks candidate features with mechanism labels such as maturity/beta identity, developmental pathway, microenvironment, and workflow sequence axes.
+- Screens raw endpoints as primary evidence, with cohort-relative composite scores only as an auxiliary baseline. Repeated measurements do not acquire extra biological-replicate weight.
+- Records whole-study removal sensitivity, collinear co-interventions and unknown study/version information; these checks are not causal adjustment or held-out intervention prediction.
+- Separates protocol-use evidence from mechanism literature. Optional bounded retrieval and JSON model interpretation preserve opposing evidence and competing explanations; keyword labels remain unverified topic hints. See [PO evidence contracts and budgets](po_scientific_evidence.md).
 - Converts ranked candidates into stage-level protocol edits with target stage/day, reagent or operation, dose or condition range, evidence refs, negative controls, and validation readouts.
 - Scores an optional new protocol as a scaled similar-protocol reference report with feature coverage and out-of-distribution flags; this is not treated as a causal or supervised prediction model.
 - Writes protocol recommendations as hypotheses with confidence, risk, provenance status, and experimental-validation requirements.
@@ -664,7 +648,7 @@ Completed:
 - Repository split into backend and frontend.
 - Next.js `agent-chat-ui` frontend integrated.
 - LangGraph server entrypoint added via `langgraph.json`.
-- Protocol chat graph exposed as `protocol_chat`.
+- The single conversation graph is `orchestrator`; PA-only graph and chat API were retired.
 - Streaming LLM/tool-call chat path implemented.
 - DeepSeek/OpenAI-compatible chat configuration supported.
 - Windows startup scripts added for backend API, LangGraph server, and frontend.
@@ -696,7 +680,7 @@ Near-term:
 
 - Add an external Orchestrator Agent graph as the main `agent-chat-ui` entrypoint.
 - Route protocol questions to Protocol Analysis tools.
-- Implement calibrated maturity and reference-similarity tools so validated Data Analysis outputs can pass the PO readiness gate.
+- Extend the available descriptive Early/Late maturity tool with separately validated reference calibration, and implement reference similarity. Task validation does not establish cross-study comparability by itself.
 - Expand Protocol Optimizing Agent from framework outputs to stronger small-sample association, mechanism prior, and active-learning recommendation modules.
 - Add graph-specific visualization for sequence features, such as transition networks or Sankey-style summaries.
 - Add better frontend rendering for generated SVG/HTML artifacts.

@@ -12,6 +12,9 @@
     "base_feature_registry_path": "configs/base_feature_registry.json",
     "approved_feature_registry_path": "configs/approved_feature_registry.json",
     "max_llm_feature_discovery_protocols": 0,
+    "max_llm_normalization_events": 0,
+    "max_llm_semantic_stages": 0,
+    "max_llm_step_semantics": 8,
     "exclude_validation_flags": [
       "missing_stage_timing",
       "ambiguous_protocol_identity",
@@ -26,6 +29,8 @@
     "timeout_seconds": 60
   },
   "h5ad": {
+    "requested_tasks": ["cell_type_composition", "maturity"],
+    "maturity": {"cell_types": ["Beta"]},
     "annotation_cell_type_column": "cell_type",
     "sample_column": "sample_id",
     "condition_column": "condition_id",
@@ -34,6 +39,7 @@
     "batch_column": "batch_id"
   },
   "optimization_objective": {
+    "mechanism": {"max_llm_calls": 0, "max_literature_queries": 0, "papers_per_query": 3},
     "primary": "increase_beta_like_maturity",
     "secondary": [
       "increase_endocrine_efficiency",

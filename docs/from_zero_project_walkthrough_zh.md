@@ -38,7 +38,7 @@ $env:PYTHONPATH = "backend"
 | 函数 | 接收输入并完成一项工作 | load_protocol_analysis_inputs |
 | 类 | 把配置和相关方法放在一起 | ProtocolAnalysisAgent |
 | 数据契约 / schema | 规定字段、类型和有效值 | schemas.py、science/models.py |
-| 工具 | Agent 可以调用的函数接口 | interfaces/langgraph_server.py 中的 @tool 函数 |
+| 工具 | Agent 可以调用的函数接口 | agents/actions.py 中的注册动作及 PA/DA/PO 模块中的执行封装 |
 | 节点 | 图里的一步计算 | PA 的 _node_* 方法 |
 | State | 当前图执行中的工作数据 | ProtocolAnalysisState、OrchestratorState |
 | 产物 / artifact | 写到文件里的结果及其身份 | CSV、JSON、报告 |
@@ -117,7 +117,7 @@ State 是本次流程的工作台，不等于长期记忆。一般字段按更�
 
 analysis/protocol/query_engine.py 读取 PA 已生成产物，提供 find_protocols、compare_protocols、get_evidence_for_feature 等确定性方法。查询不等于重新读论文或重跑分析。
 
-interfaces/langgraph_server.py 用 @tool 将这些能力暴露给聊天模型。模型看到工具名称、说明和参数 schema，返回工具调用请求；ToolNode 执行函数，把结果作为工具消息回传。`bind_tools` 只是让模型知道能用哪些工具，实际执行由程序完成。
+agents/orchestrator.py 只向模型绑定 `execute_scientific_action`。模型根据 actions.py 的唯一能力清单提出计划；代码检查动作、输入、依赖和预算，再委派 PA/DA/PO 的领域封装执行。结果保存后作为工具消息回传，模型不能直接生成最终定量值。
 
 ```text
 configure → agent → 有 tool_calls？
@@ -150,7 +150,6 @@ PO 读取 PA 特征与 DA 表型，通过输入门、表型目标、连接、关
 | 入口 | 运行方式 | 用途 |
 | --- | --- | --- |
 | agents/pipeline.py | 按固定顺序调用 PA、DA、PO | 批处理 pipeline |
-| interfaces/langgraph_server.py 的 protocol_chat | LLM ↔ 协议查询工具 | 协议问答 |
 | agents/orchestrator.py 的 orchestrator | LLM ↔ SubAgent/注册科学操作工具 | 跨领域对话调度 |
 
 agents/orchestrator.py 的图是 configure → orchestrator → subagents → orchestrator，并在没有工具调用时 finalize。它由模型选择工具；“subagents 节点”并不自动表示三个领域 Agent 在并行讨论。
@@ -172,10 +171,10 @@ langgraph.json 注册两张可对外使用的图。LangGraph Server 运行图并
 另一个终端：
 
 ```powershell
-.\scripts\start_frontend.ps1 -HostAddress 127.0.0.1 -Port 5173 -LangGraphApiUrl "http://127.0.0.1:2024" -AssistantId "protocol_chat"
+.\scripts\start_frontend.ps1 -HostAddress 127.0.0.1 -Port 5173 -LangGraphApiUrl "http://127.0.0.1:2024" -AssistantId "orchestrator"
 ```
 
-先使用 protocol_chat 验证单一协议问答，再将 AssistantId 改为 orchestrator 学习跨领域调度。前端脚本会写 frontend/.env.local；此处给出操作方法，本次没有启动服务或改写环境文件。认证部署另读 authenticated_deployment.md。
+统一使用 orchestrator：单一协议问答只调用 PA，数据问题调用 DA，优化问题按计划整合上游结果。前端脚本会写 frontend/.env.local；此处给出操作方法，本次没有启动服务或改写环境文件。认证部署另读 authenticated_deployment.md。
 
 验收：用户能看见工具调用，访问正确输出快照，错误能显示，用户之间的数据受代码授权约束。
 

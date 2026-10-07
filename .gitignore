@@ -6,7 +6,15 @@ __pycache__/
 .langgraph_api/
 runs/
 data/input/
-inputs/
+inputs/*
+!inputs/Gene_Programs/
+inputs/Gene_Programs/*
+!inputs/Gene_Programs/Alpha_Stability_Early_Program.csv
+!inputs/Gene_Programs/Alpha_Stability_Late_Program.csv
+!inputs/Gene_Programs/Beta_Stability_Early_Program.csv
+!inputs/Gene_Programs/Beta_Stability_Late_Program.csv
+!inputs/Gene_Programs/Delta_Stability_Early_Program.csv
+!inputs/Gene_Programs/Delta_Stability_Late_Program.csv
 .tmp/
 *.h5ad
 external_tools/
