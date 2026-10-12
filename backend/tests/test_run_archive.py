@@ -27,7 +27,7 @@ def _archive(tmp_path: Path) -> RunArchive:
     return archive
 
 
-def _graph_input(tmp_path: Path, run_id: str, question: str = "hello") -> dict:
+def _graph_input(tmp_path: Path, run_id: str, question: str = "Find Protocol A") -> dict:
     return {
         "messages": [HumanMessage(content=question)],
         "workspace_root": str(tmp_path),

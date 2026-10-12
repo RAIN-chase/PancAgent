@@ -72,6 +72,9 @@ bash scripts/start_linux.sh frontend-start
 ```
 
 Defaults bind to `127.0.0.1`: chat on port 2024, frontend on port 3000.
+Chat disables automatic reloading and browser launch. Each run archives Python
+source under `runs/.../source`; watching those copies would restart the server
+and cancel active requests. Restart chat manually after changing application code.
 Set `HOST_ADDRESS` or `PORT` explicitly to override them. The script does not
 overwrite environment files or select another port silently. Stop with Ctrl+C.
 
@@ -110,6 +113,24 @@ a custom configuration only when the access mode is not authenticated.
 Production requires an appropriate persistent Agent Server deployment,
 HTTPS/reverse proxy with streaming support, and operational backup policies.
 A service manager alone does not convert the dev server into production.
+
+## Repeated reloads or cancelled requests
+
+If logs show `WatchFiles detected changes in runs/.../source/...py`, followed by
+`Reloading` and `CancelledError`, runtime source snapshots are triggering the dev
+watcher. Stop the backend and restart with `--no-reload`; do not disable source
+archiving or remove historical runs. Before the updated launcher is installed,
+use this equivalent command from the repository root:
+
+```bash
+langgraph dev --no-reload --no-browser --config langgraph.json --host 127.0.0.1 --port 2024
+```
+
+For authenticated deployments use `langgraph.authenticated.json` instead.
+Start a new frontend conversation to test a clean request after the restart;
+old queued retries may still be resumed. This resolves watcher-triggered
+cancellations, not every possible immutable-run error. If that error persists
+without reloads, retain its full application traceback for separate diagnosis.
 
 ## Verify and update
 

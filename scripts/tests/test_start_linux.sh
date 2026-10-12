@@ -40,10 +40,13 @@ check_contains "$output" "cwd=<$ROOT>"
 check_contains "$output" 'arg=<langgraph.json>'
 check_contains "$output" 'arg=<127.0.0.1>'
 check_contains "$output" 'arg=<2024>'
+check_contains "$output" 'arg=<--no-reload>'
+check_contains "$output" 'arg=<--no-browser>'
 
 output="$(PROTOCOL_ACCESS_MODE=authenticated LANGGRAPH_CONFIG=langgraph.json PORT=2124 bash "$ROOT/scripts/start_linux.sh" chat)"
 check_contains "$output" 'arg=<langgraph.authenticated.json>'
 check_contains "$output" 'arg=<2124>'
+check_contains "$output" 'arg=<--no-reload>'
 
 printf '%s\n' 'TEST_ONLY=1' > "$TMP/test.env"
 output="$(PROTOCOL_ENV_FILE="$TMP/test.env" bash "$ROOT/scripts/start_linux.sh" chat)"

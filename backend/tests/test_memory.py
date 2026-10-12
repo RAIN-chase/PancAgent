@@ -5,6 +5,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
+from langgraph.checkpoint.memory import InMemorySaver
 from protocol_optimization_agent.agents import orchestrator
 from protocol_optimization_agent.agents.actions import get_action
 from protocol_optimization_agent.runtime.archive import file_hash
@@ -64,6 +65,20 @@ def test_same_thread_recovers_after_new_graph_and_new_run(tmp_path, monkeypatch)
     assert first["messages"][0].content in restored["user_constraints"]
     assert old_ref in restored["result_refs"]
     assert file_hash(tmp_path / "users/alice/runs/first" / old_ref["path"]) == old_ref["sha256"]
+
+
+def test_checkpoint_chat_followup_creates_new_archive(tmp_path, monkeypatch):
+    fake_execute(monkeypatch, [lookup(), lookup()])
+    graph = orchestrator.build_orchestrator_graph(compile_graph=False).compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "checkpoint-chat"}}
+    first = graph.invoke(initial(tmp_path), config)
+    first_root = tmp_path / "users/alice/runs" / first["run_id"]
+    original = file_hash(first_root / "bundle_manifest.json")
+    second = graph.invoke({"messages": [HumanMessage(content="Protocol A again")]}, config)
+    assert second["run_id"] != first["run_id"]
+    assert second["parent_run_id"] == first["run_id"]
+    assert file_hash(first_root / "bundle_manifest.json") == original
+    assert second["request"]["session_summary"]["version"] == 2
 
 
 def test_explicit_endpoint_switch_cannot_succeed_using_old_gene_result(tmp_path, monkeypatch):

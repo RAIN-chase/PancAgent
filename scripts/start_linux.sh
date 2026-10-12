@@ -42,7 +42,8 @@ case "$MODE" in
     if [[ "${PROTOCOL_ACCESS_MODE:-local}" == authenticated ]]; then
       CONFIG=langgraph.authenticated.json
     fi
-    exec langgraph dev --config "$CONFIG" --host "$HOST" --port "${PORT:-2024}"
+    # Archives contain copied Python source; watching them causes reload/cancel loops.
+    exec langgraph dev --no-reload --no-browser --config "$CONFIG" --host "$HOST" --port "${PORT:-2024}"
     ;;
   api)
     exec python -m uvicorn protocol_optimization_agent.interfaces.api:create_app --factory --host "$HOST" --port "${PORT:-8000}" "$@"

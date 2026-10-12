@@ -16,6 +16,27 @@ from protocol_optimization_agent.science.reporting import pointer_value, saved_r
 GoalType = Literal["lookup", "protocol_comparison", "endpoint_analysis", "endpoint_comparison", "hypothesis", "quality", "state"]
 
 
+def conversational_reply(question: str) -> tuple[str, list[str]] | None:
+    text = question.strip().rstrip(" !！?？。.,，~～").casefold()
+    if re.fullmatch(r"(?:你好|您好)(?:呀|啊|哦)?|嗨|hello|hi|hey|早上好|晚上好|早安|下午好", text):
+        return "你好，你想比较哪些 protocols，或分析什么数据？", []
+    if re.fullmatch(r"谢谢(?:你|您)?|感谢|thanks|thank you|再见|bye", text):
+        return "不客气，有新的 protocol 或数据问题可以继续讨论。", []
+    if re.fullmatch(r"你(?:能|可以)(?:做什么|帮我什么|做哪些分析)|你有哪些功能|你是谁|what can you do|help", text):
+        from protocol_optimization_agent.agents.actions import action_registry
+        labels = {"protocol.compare": "protocol 差异比较", "protocol.steps": "步骤与来源查询",
+                  "data.assess": "数据质量检查", "phenotype.gene_expression": "基因表达查询",
+                  "phenotype.cell_composition": "细胞组成分析", "phenotype.differential_expression": "差异表达分析",
+                  "phenotype.beta_maturity": "成熟度评分", "hypothesis.generate": "待验证优化假说"}
+        available = [labels[action["id"]] for action in action_registry()["actions"]
+                     if action["availability"] == "available" and action["id"] in labels]
+        return "我是 PancAgent，可以协助" + "、".join(available) + "。具体分析取决于可用数据和方法前提，优化假说不代表已验证效果。你想先讨论什么？", []
+    if re.fullmatch(r"(?:请|帮我|请帮我)?(?:分析|比较|优化)(?:一下)?|帮帮我|分析数据|分析一下数据", text):
+        question = "你希望分析什么问题？请说明比较对象或数据集，以及关注的指标。"
+        return question, [question]
+    return None
+
+
 def question_goal(question: str) -> str:
     if re.search(r"哪个.*(?:好|优)|哪种.*更好|更好|优劣|which.*(?:better|superior)|best protocol", question, re.I):
         return "endpoint_comparison"
@@ -77,10 +98,12 @@ class AnalysisPlan(BaseModel):
     clarification_questions: list[str] = Field(default_factory=list)
     evidence_gaps: list[str] = Field(default_factory=list)
     alternative_explanations: list[str] = Field(default_factory=list)
-    steps: list[PlanStep] = Field(min_length=1, max_length=12)
+    steps: list[PlanStep] = Field(default_factory=list, max_length=12)
 
     @model_validator(mode="after")
     def dependency_order(self) -> AnalysisPlan:
+        if not self.steps and not self.clarification_questions:
+            raise ValueError("A plan requires executable steps or explicit clarification questions")
         seen: set[str] = set()
         for step in self.steps:
             if step.id in seen or not set(step.depends_on).issubset(seen):

@@ -3,7 +3,7 @@ import type { AnalysisReport, StateType } from "@/providers/Stream";
 
 export function AnalysisProgress({ values }: { values: StateType }) {
   const plan = values.plan;
-  if (!plan?.steps?.length && !values.stop_reason) return null;
+  if (!plan?.steps?.length) return null;
   const results = values.step_results ?? [];
   const lastMessage = values.messages.at(-1);
   const candidate =

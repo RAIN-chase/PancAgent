@@ -220,8 +220,9 @@ def build_final_report(state: dict[str, Any], root: Path) -> dict[str, Any]:
             used_tools.add(step["tool_name"])
         used_tools.update(result.get("used_tools", []))
         used_features.update(result.get("used_features", []))
-        bindings.extend(numeric_bindings(result, ref))
         action = step["action_id"]
+        if action != "scientific.state":
+            bindings.extend(numeric_bindings(result, ref))
         section = (
             "hypotheses"
             if action in {"hypothesis.generate", "experiment.propose"}
@@ -332,7 +333,8 @@ def relevant_bindings(report: dict[str, Any], root: Path, limit: int = 25) -> li
     for binding in report["quantitative_bindings"]:
         path = binding["field_path"]
         if not path.startswith(("/result_preview/", "/phenotype_ir/")) or path.rsplit("/", 1)[-1] in {
-            "sample_id", "dataset_id", "protocol_id", "version", "rank", "confidence_score", "match_score"}:
+            "sample_id", "dataset_id", "protocol_id", "version", "rank", "confidence_score", "match_score",
+            "limit", "limit_per_kind", "max_features", "max_rows"}:
             continue
         if binding["result_id"] not in cache:
             cache[binding["result_id"]] = saved_result(binding, root)
@@ -355,6 +357,8 @@ def relevant_bindings(report: dict[str, Any], root: Path, limit: int = 25) -> li
 def render_report(report: dict[str, Any], root: Path) -> str:
     lines = ["# Scientific Analysis", "", "Stop reason: " + report["stop_reason"],
              "Question acceptance: " + report["acceptance"]["status"], "", "## Conclusions"]
+    if report["stop_reason"].startswith("analysis_error:"):
+        lines.insert(0, "本次自动复核未通过格式或引用校验；以下保留已完成的工具结果，不代表科研证据被否定。\n")
     for claim in report["conclusions"]:
         lines.extend([f"- **{claim['evidence_level']}**: {claim['claim']}", claim["explanation"]])
         for field, label in (("supporting_refs", "Supporting evidence"), ("opposing_refs", "Opposing evidence")):
@@ -405,7 +409,7 @@ def render_report(report: dict[str, Any], root: Path) -> str:
         lines.append(f"- `{binding['result_id']}{binding['field_path']}`: {value}")
     lines.append(f"Displayed {len(report['display_quantitative_bindings'])} question-selected fields; "
                  f"{len(report['quantitative_bindings'])} numeric references retained in the complete report.")
-    lines.append(f"[Complete result JSON](<{report['complete_results']['report_json']}>)")
+    lines.append("完整结构化报告可通过分析面板的下载按钮获取。")
     if report["clarification_questions"]:
         lines.extend(["", "## Clarification Needed", *["- " + question for question in report["clarification_questions"]]])
     if report["evidence_gaps"]:

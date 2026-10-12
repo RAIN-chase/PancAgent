@@ -26,6 +26,7 @@ from protocol_optimization_agent.agents.analysis_flow import (
     AnalysisPlan,
     ReviewProposal,
     budget_stop,
+    conversational_reply,
     initialize_budget,
     inspect_result,
     parse_object,
@@ -162,6 +163,7 @@ def _configure_node(state: OrchestratorState, config: RunnableConfig) -> dict[st
     update = configured.get("request", {}).get("memory_update", {})
     summary = update_summary(previous, _last_human_content(configured.get("messages", [])), update, raw_messages)
     summary["scope"] = scope
+    reply = conversational_reply(_last_human_content(configured.get("messages", [])))
     protocol_output_dir = resolve_domain_output_dir("protocol_analysis", configured.get("protocol_output_dir"), context)
     data_analysis_output_dir = resolve_domain_output_dir("data_analysis", configured.get("data_analysis_output_dir"), context)
     optimization_output_dir = resolve_domain_output_dir("protocol_optimization", configured.get("optimization_output_dir"), context)
@@ -178,9 +180,10 @@ def _configure_node(state: OrchestratorState, config: RunnableConfig) -> dict[st
         memory.capture(thread_id, raw_messages)
         atomic_json(archive.root / "conversation_messages.json", raw_messages)
         atomic_json(archive.root / "session_summary_input.json", summary)
-        protocol_output_dir = str(archive.seed(Path(protocol_output_dir), "protocol_analysis"))
-        data_analysis_output_dir = str(archive.seed(Path(data_analysis_output_dir), "data_analysis"))
-        optimization_output_dir = str(archive.seed(Path(optimization_output_dir), "protocol_optimization"))
+        if reply is None:
+            protocol_output_dir = str(archive.seed(Path(protocol_output_dir), "protocol_analysis"))
+            data_analysis_output_dir = str(archive.seed(Path(data_analysis_output_dir), "data_analysis"))
+            optimization_output_dir = str(archive.seed(Path(optimization_output_dir), "protocol_optimization"))
     except BaseException as exc:
         archive.record("error", {"type": type(exc).__name__, "message": str(exc)})
         archive.finish({"error": str(exc)}, status="failed")
@@ -210,6 +213,7 @@ def _configure_node(state: OrchestratorState, config: RunnableConfig) -> dict[st
         "request": {"question": _last_human_content(configured.get("messages", [])),
                     "goal_type": question_goal(_last_human_content(configured.get("messages", []))),
                     "plan": configured.get("request", {}).get("plan"),
+                    "direct_reply": reply,
                     "session_summary": summary,
                     "context_reset": reset,
                     "endpoint_change": "endpoints" in update or summary["endpoints"] != previous["endpoints"],
@@ -231,7 +235,9 @@ def _model_proposal(model: Runnable, state: Mapping[str, Any], phase: str, valid
         return None, {"stop_reason": reason}
     schema = AnalysisPlan.model_json_schema() if phase == "plan" else ReviewProposal.model_json_schema()
     system = SystemMessage(content=(
-        "Return only a JSON object matching the schema. Propose registered available actions, never execute or approve "
+        "Return only a JSON object matching the schema. If essential scientific parameters are missing, return empty "
+        "steps and explicit clarification_questions; do not call scientific.state or any filler tool. "
+        "Propose registered available actions, never execute or approve "
         "experiments. Tools are proposal syntax only and all proposals are validated by code. Do not author numeric "
         "analysis results. Unknown scientific prerequisites remain unknown. Review valid results, retain opposing evidence, "
         "identify alternative explanations, and propose independent next steps only if they add evidence. Use a structured "
@@ -299,7 +305,8 @@ def _validated_model_proposal(model: Runnable, state: Mapping[str, Any], phase: 
             _state_archive(state).record(phase + "_validation_error", {"message": error})
             budget = dict(updates.get("budget", state["budget"]))
             if budget["format_repairs"] >= 1:
-                return None, {**updates, "stop_reason": "evidence_insufficient:invalid_" + phase}
+                reason = "analysis_error:invalid_review" if phase == "review" else "evidence_insufficient:invalid_plan"
+                return None, {**updates, "stop_reason": reason}
             budget["format_repairs"] += 1
             updates["budget"] = budget
 
@@ -322,6 +329,11 @@ def _planning_request(state: OrchestratorState, plan: dict[str, Any]) -> dict[st
 
 def _plan_node(model: Runnable | None):
     def run(state: OrchestratorState) -> dict[str, Any]:
+        if state["request"].get("direct_reply"):
+            text, questions = state["request"]["direct_reply"]
+            return {"plan": {**state["plan"], "clarification_questions": questions},
+                    "request": {**state["request"], "reply_text": text},
+                    "stop_reason": "needs_clarification" if questions else "conversation"}
         updates: dict[str, Any] = {}
         try:
             request = _planning_request(state, state["plan"])
@@ -331,6 +343,8 @@ def _plan_node(model: Runnable | None):
                 if proposal.get("conclusions") or proposal.get("acceptance") or proposal.get("conclusion_refs"):
                     raise ValueError("Acceptance and conclusions are review-owned fields")
                 plan = AnalysisPlan.model_validate(proposal).model_dump()
+                if plan["steps"] and all(step["action_id"] == "scientific.state" for step in plan["steps"]) and state["request"]["goal_type"] != "state":
+                    raise ValueError("Scientific state inspection alone does not answer this request; clarify or plan the requested analysis")
                 plan["question"] = state["request"]["question"]
                 if state["request"]["endpoint_change"]:
                     plan["target_metrics"] = state["request"]["session_summary"]["endpoints"]
@@ -363,6 +377,12 @@ def _plan_node(model: Runnable | None):
                 proposal = {"question": question, "steps": [{"id": "s1", "action_id": action_id, "inputs": inputs,
                                                               "expected_outputs": get_action(action_id).outputs}]}
                 plan = validate(proposal)
+            if not plan["steps"]:
+                archive = _state_archive(state)
+                atomic_json(archive.root / "analysis_plan.json", plan)
+                archive.record("analysis_plan", {"plan": plan, "phase": "clarification"})
+                return {**updates, "plan": plan, "stop_reason": "needs_clarification",
+                        "request": {**state["request"], "reply_text": "\n".join(plan["clarification_questions"])}}
             archive = _state_archive(state)
             atomic_json(archive.root / "analysis_plan.json", plan)
             archive.record("analysis_plan", {"plan": plan, "phase": "initial"})
@@ -521,10 +541,17 @@ def _state_archive(state: Mapping[str, Any]) -> RunArchive:
 def _finalize_node(state: OrchestratorState) -> dict[str, Any]:
     archive = _state_archive(state)
     budget = {**state["budget"], "elapsed_seconds": time.time() - state["budget"]["started_at"]}
-    report = build_final_report({**state, "budget": budget}, archive.root)
     store = ScientificWorldModel(archive.context, archive.context.project_id)
-    remember_report(store, report, archive.root)
-    message = AIMessage(content=render_report(report, archive.root), additional_kwargs={"analysis_report": report})
+    direct = state["request"].get("reply_text")
+    if direct:
+        report = {"schema_version": "conversation-response-v1", "run_id": state["run_id"], "plan": state["plan"],
+                  "step_results": [], "conclusions": [], "clarification_questions": state["plan"].get("clarification_questions", [])}
+        message = AIMessage(content=direct)
+        atomic_json(archive.root / "conversation_response.json", {**report, "content": direct})
+    else:
+        report = build_final_report({**state, "budget": budget}, archive.root)
+        remember_report(store, report, archive.root)
+        message = AIMessage(content=render_report(report, archive.root), additional_kwargs={"analysis_report": report})
     final = message.model_dump(mode="json")
     final.update(run_id=state["run_id"], trace_id=state["trace_id"], stop_reason=state["stop_reason"])
     raw_messages = [item.model_dump(mode="json") for item in scoped_messages(state.get("messages", []), state["request"].get("context_reset", False))] + [message.model_dump(mode="json")]
@@ -535,7 +562,8 @@ def _finalize_node(state: OrchestratorState) -> dict[str, Any]:
         failed = con.execute("SELECT 1 FROM events WHERE kind='error' LIMIT 1").fetchone()
         partial = con.execute("SELECT 1 FROM events WHERE kind='tool_summary' AND json_extract(payload,'$.status') NOT IN "
                               "('ok','optimization_ran','ok_cached_optimization_outputs') LIMIT 1").fetchone()
-    archive.finish(final, status="partial" if failed or partial or state.get("stop_reason") != "completed" else "succeeded")
+    archive.finish(final, status="succeeded" if direct else
+                   "partial" if failed or partial or state.get("stop_reason") != "completed" else "succeeded")
     return {"budget": budget, "messages": [message], "request": {**state["request"], "session_summary": summary}}
 
 

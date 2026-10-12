@@ -214,7 +214,7 @@ def test_model_fabricated_numbers_do_not_enter_final_report(tmp_path):
         ]
     )
     result = orchestrator.build_orchestrator_graph(model).invoke(state)
-    assert result["stop_reason"] == "evidence_insufficient:invalid_review"
+    assert result["stop_reason"] == "analysis_error:invalid_review"
     assert "123456789" not in json.dumps(result["messages"][-1].additional_kwargs["analysis_report"])
 
 
