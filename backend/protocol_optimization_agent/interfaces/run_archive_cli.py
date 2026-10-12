@@ -17,9 +17,37 @@ def main() -> None:
     ingest.add_argument("--registry", type=Path, required=True)
     verify = commands.add_parser("verify")
     verify.add_argument("--run-dir", type=Path, required=True)
+    publish = commands.add_parser("publish-catalog")
+    publish.add_argument("--catalog", type=Path, required=True)
+    publish.add_argument("--dataset-id", required=True)
     args = parser.parse_args()
     if args.command == "register-input":
         print(json.dumps(register_dataset(args.source, args.storage, args.registry), indent=2))
+        return
+    if args.command == "publish-catalog":
+        from protocol_optimization_agent.runtime.archive import atomic_json
+        import h5py
+
+        catalog = json.loads(args.catalog.read_text(encoding="utf-8"))
+        entries = [row for row in catalog["datasets"] if row["dataset_id"] == args.dataset_id]
+        if len(entries) != 1:
+            raise ValueError("Publication requires one unambiguous dataset ID")
+        entry = entries[0]
+        path = Path(entry["h5ad_path"])
+        before = path.stat()
+        checksum = file_hash(path)
+        with h5py.File(path, "r") as handle:
+            if handle.attrs.get("encoding-type") != "anndata" or "X" not in handle:
+                raise ValueError("Not a supported AnnData h5ad")
+            for axis, field in (("obs", "n_obs"), ("var", "n_vars")):
+                entry[field] = handle[axis][handle[axis].attrs.get("_index", "_index")].shape[0]
+        after = path.stat()
+        if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError("File changed while publishing; finish transfer first")
+        entry.update(status="ready", version=f"sha256:{checksum}", size_bytes=after.st_size, mtime_ns=after.st_mtime_ns)
+        catalog["version"] = f"sha256:{file_hash(args.catalog)}+{checksum}"
+        atomic_json(args.catalog, catalog)
+        print(json.dumps({key: entry[key] for key in ("dataset_id", "status", "version", "n_obs", "n_vars")}))
         return
     manifest = json.loads((args.run_dir / "run_manifest.json").read_text(encoding="utf-8"))
     invalid = [entry["path"] for entry in manifest.get("artifacts", [])

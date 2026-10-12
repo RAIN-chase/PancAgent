@@ -912,6 +912,13 @@ def data_analysis_agent(
     forbid_client_paths(request or {})
     forbid_client_paths(h5ad_config or {})
     h5ad_manifest_rows = resolve_manifest_artifacts(h5ad_manifest_rows or [], context.user_id, project_id)
+    if not h5ad_manifest_rows and (request or {}).get("dataset_id"):
+        import os
+        if os.getenv("PROTOCOL_DATA_CATALOG"):
+            from protocol_optimization_agent.runtime.data_catalog import catalog_manifest
+
+            h5ad_manifest_rows = catalog_manifest(str(request["dataset_id"]), context.user_id, project_id,
+                                                  str(request.get("dataset_version") or ""))
     output_dir = Path(resolve_domain_output_dir("data_analysis", data_analysis_output_dir, context))
     structured_request = _build_data_analysis_request(question, request or {})
     selected_operation = str(structured_request["operation"])
@@ -1030,6 +1037,7 @@ def _build_data_analysis_request(question: str, request: dict[str, Any]) -> dict
         "genes": genes,
         "protocol_id": str(request.get("protocol_id") or ""),
         "dataset_id": str(request.get("dataset_id") or ""),
+        "dataset_version": str(request.get("dataset_version") or ""),
         "sample_id": str(request.get("sample_id") or ""),
         "condition_id": str(request.get("condition_id") or ""),
         "groupby": str(request.get("groupby") or request.get("obs_column") or ""),

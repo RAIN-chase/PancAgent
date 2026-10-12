@@ -67,6 +67,7 @@ def assess_question(plan: dict[str, Any], records: list[dict[str, Any]], root: P
         "lookup": {"protocol_candidates"}, "protocol_comparison": {"feature_diff", "event_step_diff"},
         "endpoint_analysis": {"numeric_results"}, "endpoint_comparison": {"cohorts", "observations"},
         "hypothesis": {"hypotheses"}, "quality": {"dataset_summaries"}, "state": {"versioned_world_model"},
+        "catalog": {"configured", "datasets", "collections"},
     }
     kind = plan.get("goal_type", "lookup")
     candidates, objects, metrics = [], set(), set()
@@ -221,7 +222,7 @@ def build_final_report(state: dict[str, Any], root: Path) -> dict[str, Any]:
         used_tools.update(result.get("used_tools", []))
         used_features.update(result.get("used_features", []))
         action = step["action_id"]
-        if action != "scientific.state":
+        if action not in {"scientific.state", "data.catalog"}:
             bindings.extend(numeric_bindings(result, ref))
         section = (
             "hypotheses"
@@ -268,7 +269,7 @@ def build_final_report(state: dict[str, Any], root: Path) -> dict[str, Any]:
     conclusions = state["plan"].get("conclusions", [])
     if not conclusions:
         ids = acceptance["supporting_result_ids"] or state["plan"].get("conclusion_refs", [])
-        levels = {"lookup": "fact", "quality": "fact", "state": "fact", "hypothesis": "hypothesis",
+        levels = {"lookup": "fact", "quality": "fact", "state": "fact", "catalog": "fact", "hypothesis": "hypothesis",
                   "endpoint_analysis": "descriptive", "protocol_comparison": "descriptive", "endpoint_comparison": "descriptive"}
         if any(step["action_id"] == "phenotype.differential_expression" and step.get("result_ref", {}).get("result_id") in ids
                for step in state.get("step_results", []) if step.get("result_ref")):
@@ -355,6 +356,8 @@ def relevant_bindings(report: dict[str, Any], root: Path, limit: int = 25) -> li
 
 
 def render_report(report: dict[str, Any], root: Path) -> str:
+    if report["plan"].get("goal_type") == "catalog" and all(step["action_id"] == "data.catalog" for step in report["plan"]["steps"]):
+        return _render_data_catalog(report, root)
     lines = ["# Scientific Analysis", "", "Stop reason: " + report["stop_reason"],
              "Question acceptance: " + report["acceptance"]["status"], "", "## Conclusions"]
     if report["stop_reason"].startswith("analysis_error:"):
@@ -376,6 +379,8 @@ def render_report(report: dict[str, Any], root: Path) -> str:
                 result = saved_result(record["result_ref"], root) if record.get("result_ref") else {}
                 preview = result.get("result_preview", {})
                 payload = preview if isinstance(preview, dict) else {}
+                if record.get("action_id") == "data.catalog":
+                    lines.extend(_catalog_lines(payload))
                 view = {"summary": payload.get("answer", ""),
                         "feature_differences": payload.get("tool_result", {}).get("feature_differences", []),
                         "hypotheses": payload.get("hypotheses", payload.get("next_experiment_candidates", {}).get("hypotheses", []))}
@@ -416,3 +421,39 @@ def render_report(report: dict[str, Any], root: Path) -> str:
         lines.extend(["", "## Evidence Gaps", *["- " + str(gap) for gap in report["evidence_gaps"]]])
     lines.extend(["", "## Caveats", *["- " + text for text in report["confidence_caveats"]]])
     return "\n".join(lines)
+
+
+def _catalog_lines(catalog: dict[str, Any]) -> list[str]:
+    if catalog.get("configured") is False:
+        return ["服务器尚未配置数据目录（PROTOCOL_DATA_CATALOG）。请由管理员完成配置；你不需要提供文件路径。"]
+    if not isinstance(catalog.get("datasets"), list):
+        return ["本次数据目录查询失败，无法判断有哪些数据可用。请由管理员检查配置或访问权限。"]
+    datasets = catalog["datasets"]
+    labels = {"reference_atlas": "参考图谱", "public_organoid": "公共类器官", "user_scrna": "用户单细胞",
+              "ready": "文件就绪", "transferring": "传输中", "pending": "待注册", "failed": "传输失败", "unavailable": "不可用"}
+    def cell(value):
+        return str(value if value is not None and value != "" else "未提供").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    lines = ["当前项目可访问的已登记数据如下："]
+    if not datasets:
+        lines = ["当前用户和项目下暂无已登记的数据集；这不表示服务器上没有其他文件。"]
+    else:
+        lines += ["", "| 数据集 ID | 名称 | 类型 | 状态 | 可分析 | 版本 | 细胞数 | 基因数 |",
+                  "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+        for row in datasets:
+            values = [row.get("dataset_id"), row.get("name"), labels.get(row.get("role"), row.get("role")),
+                      labels.get(row.get("status"), row.get("status")), "是" if row.get("analysis_available") else "否",
+                      row.get("version"), row.get("n_obs"), row.get("n_vars")]
+            lines.append("| " + " | ".join(cell(value) for value in values) + " |")
+        lines += ["", "可继续指定上表中的数据集 ID 和分析目标；无需再次提供服务器路径。"]
+    for collection in catalog.get("collections", []):
+        if collection.get("status") in {"pending", "transferring"}:
+            lines.append("- 数据集合：" + cell(collection.get("name", collection.get("collection_id"))) + " · " + labels[collection["status"]])
+    return [*lines, "", "文件就绪不等于科学 QC 通过；传输中或不可用的数据不会用于分析。此清单仅覆盖已登记且获授权的数据。"]
+
+
+def _render_data_catalog(report: dict[str, Any], root: Path) -> str:
+    lines = []
+    for step in report["step_results"]:
+        result = saved_result(step["result_ref"], root) if step.get("result_ref") else {}
+        lines.extend(_catalog_lines(result.get("result_preview", {}) if step.get("usable") else {}))
+    return "\n".join(lines) or "本次数据目录查询未完成，无法确认当前可用数据。停止原因：" + report["stop_reason"]

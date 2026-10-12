@@ -658,7 +658,10 @@ def protocol_analysis_agent(
     forbid_client_paths(request or {})
     output_dir = resolve_domain_output_dir("protocol_analysis", protocol_output_dir, context)
     engine = ProtocolQueryEngine(Path(output_dir))
-    if request and request.get("protocol_id_a") and request.get("protocol_id_b"):
+    if request and request.get("protocol_ids"):
+        comparison = engine.compare_many(request["protocol_ids"], max_features)
+        result = {"status": comparison.get("status", "not_found"), "intent": "compare_protocols", "tool_result": comparison}
+    elif request and request.get("protocol_id_a") and request.get("protocol_id_b"):
         comparison = engine.compare_protocols(str(request["protocol_id_a"]), str(request["protocol_id_b"]), max_features)
         result = {"status": comparison.get("status", "not_found"), "intent": "compare_protocols", "tool_result": comparison}
     else:
@@ -666,6 +669,7 @@ def protocol_analysis_agent(
     store = ScientificWorldModel(context, project_id)
     comparison = result.get("tool_result", {})
     protocol_ids = {str(comparison.get(key, {}).get("protocol_id") or "") for key in ("protocol_a", "protocol_b")} - {""}
+    protocol_ids.update(comparison.get("protocol_ids", []))
     protocol_rows = [row for protocol_id in sorted(protocol_ids) for row in engine.query_matrix(filters={"protocol_id": protocol_id})]
     preconditions = scientific_preconditions(protocol_rows, [], purpose="descriptive_comparison") if protocol_ids else {}
     world_update = ingest_protocol_outputs(store, Path(output_dir), protocol_ids or None)
@@ -714,7 +718,8 @@ def protocol_analysis_agent(
 def _protocol_used_tools(result: dict[str, Any]) -> list[str]:
     intent = str(result.get("intent") or "")
     if intent == "compare_protocols":
-        return ["find_protocols", "compare_protocols"]
+        return [*(["find_protocols"] if result.get("resolved_protocols") else []),
+                "compare_many" if len(result.get("tool_result", {}).get("protocol_ids", [])) > 2 else "compare_protocols"]
     if intent:
         return [intent]
     return ["ProtocolQueryEngine.answer_question"]
@@ -723,7 +728,7 @@ def _protocol_used_tools(result: dict[str, Any]) -> list[str]:
 def _protocol_used_features(result: dict[str, Any]) -> list[str]:
     tool_result = result.get("tool_result", {})
     differences = tool_result.get("feature_differences", []) if isinstance(tool_result, dict) else []
-    return [str(row.get("feature") or "") for row in differences[:50] if row.get("feature")]
+    return [str(row.get("feature") or "") for row in differences if row.get("feature")]
 
 
 def _protocol_evidence_refs(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -755,6 +760,13 @@ def _protocol_evidence_refs(result: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
     refs.extend(tool_result.get("event_step_diff", {}).get("source_refs", []))
+    refs.extend({"protocol_id": row.get("protocol_id"), "paper_id": row.get("metadata", {}).get("paper_id", ""),
+                 "metadata": row.get("metadata", {}),
+                 "evidence_type": "protocol_summary"} for row in tool_result.get("protocols", []))
+    for row in tool_result.get("event_step_diff", {}).get("protocol_assessments", []):
+        refs.extend({"protocol_id": row["protocol_id"], "step_id": step["step_id"],
+                     "source_ref": step["source_ref"], "source_text": step["source_text"],
+                     "evidence_type": "step_annotation"} for step in row.get("semantic_steps", []))
     for key in ("protocol_a_annotations", "protocol_b_annotations"):
         for annotation in tool_result.get("event_step_diff", {}).get("semantic_alignment", {}).get(key, []):
             refs.append({"protocol_id": annotation["protocol_id"], "step_id": annotation["step_id"],

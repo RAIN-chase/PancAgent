@@ -1,0 +1,12 @@
+{
+  "schema_version": "data-catalog-v1",
+  "version": "initial",
+  "collections": [
+    {"collection_id": "reference", "role": "reference_atlas", "name": "Reference atlas", "status": "pending"},
+    {"collection_id": "organoids", "role": "public_organoid", "name": "Organoid collection", "expected_count": 51, "status": "transferring"}
+  ],
+  "datasets": [
+    {"dataset_id": "organoids-51-merged", "name": "51 organoid protocols · merged raw QC", "role": "public_organoid", "collection_id": "organoids", "status": "transferring", "h5ad_path": "/mnt/data/main/wangzy/Pancreatic_Epi_Atlas/Anndata/all_51_rawQC_snapseed_merged.h5ad", "description": "One merged h5ad; sample-to-protocol mapping and annotations require validation."},
+    {"dataset_id": "pancreatic-epi-reference", "name": "Pancreatic epithelial reference atlas", "role": "reference_atlas", "collection_id": "reference", "status": "pending", "h5ad_path": "/mnt/data/main/wangzy/Pancreatic_Epi_Atlas/Anndata/PHASE_MT_1_6_Epi_final_20260908.h5ad", "description": "Reference role inferred from filename; confirm before scientific comparison."}
+  ]
+}

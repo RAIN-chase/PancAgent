@@ -125,9 +125,10 @@ class ProtocolFindRequest(ProjectRequest):
 
 class ProtocolCompareRequest(ProjectRequest):
     output_dir: str = Field(default="runs/protocol_analysis_agent_api")
-    protocol_id_a: str
-    protocol_id_b: str
-    max_features: int = 40
+    protocol_ids: list[str] | None = None
+    protocol_id_a: str = ""
+    protocol_id_b: str = ""
+    max_features: int = Field(default=40, ge=1, le=1000)
 
 
 def create_app(*, enable_experimental_feedback: bool | None = None) -> Any:
@@ -169,6 +170,12 @@ def create_app(*, enable_experimental_feedback: bool | None = None) -> Any:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/data-catalog")
+    def list_datasets(project_id: str = "default") -> dict[str, Any]:
+        from protocol_optimization_agent.runtime.data_catalog import dataset_catalog
+
+        return dataset_catalog(_request_identity.get(), project_id)
 
     @app.post("/protocol-analysis/run")
     @archived_request
@@ -225,11 +232,14 @@ def create_app(*, enable_experimental_feedback: bool | None = None) -> Any:
     @app.post("/protocol-query/compare")
     @archived_request
     def compare_protocols(request: ProtocolCompareRequest) -> dict[str, Any]:
-        result = ProtocolQueryEngine(_request_path(request, "output_dir")).compare_protocols(
-            request.protocol_id_a,
-            request.protocol_id_b,
-            max_features=request.max_features,
-        )
+        from protocol_optimization_agent.agents.actions import validate_action_arguments
+        arguments = ({"protocol_ids": request.protocol_ids} if request.protocol_ids is not None else
+                     {"protocol_id_a": request.protocol_id_a, "protocol_id_b": request.protocol_id_b})
+        if request.protocol_ids is not None and (request.protocol_id_a or request.protocol_id_b):
+            raise ValueError("Use protocol_ids or a pair, not both")
+        validate_action_arguments("protocol.compare", arguments)
+        result = ProtocolQueryEngine(_request_path(request, "output_dir")).compare_many(
+            request.protocol_ids if request.protocol_ids is not None else [request.protocol_id_a, request.protocol_id_b], request.max_features)
         return result
 
     enabled = (os.getenv("PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED") == "1"

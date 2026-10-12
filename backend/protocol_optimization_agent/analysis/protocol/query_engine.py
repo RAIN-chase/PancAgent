@@ -143,6 +143,54 @@ class ProtocolQueryEngine:
             },
         }
 
+    def compare_many(self, protocol_ids: list[str], max_features: int = 40) -> dict[str, Any]:
+        """Compare a cohort without treating absent values as zero or ranking protocols."""
+        if not isinstance(protocol_ids, list) or any(not isinstance(pid, str) or not pid.strip() for pid in protocol_ids):
+            raise ValueError("protocol_ids must contain nonempty strings")
+        ids = list(dict.fromkeys(protocol_ids))
+        if not 2 <= len(ids) <= 100:
+            raise ValueError("Comparison requires 2 to 100 distinct protocol IDs")
+        if not 1 <= max_features <= 1000:
+            raise ValueError("max_features must be between 1 and 1000")
+        matrix = self._matrix_by_protocol()
+        missing = [pid for pid in ids if pid not in matrix]
+        if missing:
+            return {"status": "not_found", "protocol_ids": ids, "missing_protocol_ids": missing}
+        if len(ids) == 2:
+            return {**self.compare_protocols(*ids, max_features), "protocol_ids": ids}
+        keys = set().union(*(matrix[pid] for pid in ids)) - set(_metadata_keys())
+        differences = [{"feature": key, "values": {pid: matrix[pid].get(key, "") for pid in ids},
+                        "importance_group": _feature_importance_group(key),
+                        "importance_rank": _feature_importance_rank(key)}
+                       for key in keys if len({matrix[pid].get(key, "") for pid in ids}) > 1]
+        differences.sort(key=lambda row: (row["importance_rank"], row["feature"]))
+        from protocol_optimization_agent.analysis.protocol.assessment import assess_protocols
+
+        assessments = assess_protocols(self, ids)
+        from protocol_optimization_agent.analysis.protocol.step_semantics import align_steps
+
+        semantic = {row["protocol_id"]: row["semantic_steps"] for row in assessments["protocol_assessments"]}
+        # Align to an explicit anchor, not every pair; this does not establish equivalence.
+        alignments = [{"protocol_id_a": ids[0], "protocol_id_b": pid,
+                       "semantic_alignment": {key: value for key, value in align_steps(semantic[ids[0]], semantic[pid]).items()
+                                              if key not in {"protocol_a_annotations", "protocol_b_annotations"}}} for pid in ids[1:]]
+        return {"status": "ok", "protocol_ids": ids,
+                "protocols": [self.get_protocol_summary(pid) for pid in ids],
+                "feature_differences": differences[:max_features], "total_differing_features": len(differences),
+                "features_truncated": len(differences) > max_features,
+                "factor_diff": {pid: self.get_factor_diff(ids[0], pid) for pid in ids[1:]},
+                "stage_diff": {pid: self.get_stage_diff(ids[0], pid) for pid in ids[1:]},
+                "event_step_diff": {"protocol_assessments": assessments["protocol_assessments"],
+                    "detail_status": "available" if all(row["events"] and row["structured_steps"]
+                        for row in assessments["protocol_assessments"]) else "source_detail_incomplete",
+                    "anchor_protocol_id": ids[0], "anchor_alignments": alignments,
+                    "evidence_gaps": assessments["evidence_gaps"],
+                    "source_refs": [{"protocol_id": row["protocol_id"], "event_index": i, "event": event}
+                                    for row in assessments["protocol_assessments"] for i, event in enumerate(row["events"])]},
+                "audit_warnings": {pid: self.get_audit_findings(pid) for pid in ids},
+                "limitations": ["Descriptive comparison only; no phenotype ranking or causal inference.",
+                                 "Empty cells are unreported, not explicit non-use; compiled zero requires source inspection."]}
+
     def get_detailed_comparison(self, protocol_id_a: str, protocol_id_b: str) -> dict[str, Any]:
         from protocol_optimization_agent.analysis.protocol.assessment import detailed_comparison
 

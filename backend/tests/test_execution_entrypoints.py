@@ -33,9 +33,12 @@ def test_public_execution_entrypoints_remain_stable() -> None:
               if route.path.startswith(("/protocol-", "/scientific/")) or route.path == "/health"}
     assert routes == {path: methods for path, methods in expected["api"].items()
                       if path != "/protocol-query/chat" and not path.startswith("/scientific/")}
+    assert any(route.path == "/data-catalog" and "GET" in route.methods
+               for route in create_app(enable_experimental_feedback=False).routes)
     enabled = {route.path: sorted(route.methods) for route in create_app(enable_experimental_feedback=True).routes
                if route.path.startswith(("/protocol-", "/scientific/")) or route.path == "/health"}
     assert enabled == {path: methods for path, methods in expected["api"].items() if path != "/protocol-query/chat"}
     variables = [line.split("=", 1)[0] for line in (root / ".env.example").read_text(encoding="utf-8").splitlines()
                  if line and not line.startswith("#") and "=" in line]
-    assert variables == [*expected["environment_variables"], "PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED"]
+    assert set(variables) == set(expected["environment_variables"]) | {
+        "PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED", "PROTOCOL_DATA_CATALOG"}

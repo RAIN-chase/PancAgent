@@ -13,7 +13,7 @@ from protocol_optimization_agent.agents.actions import get_action, validate_acti
 from protocol_optimization_agent.runtime.context import content_fingerprint
 from protocol_optimization_agent.science.reporting import pointer_value, saved_result
 
-GoalType = Literal["lookup", "protocol_comparison", "endpoint_analysis", "endpoint_comparison", "hypothesis", "quality", "state"]
+GoalType = Literal["lookup", "protocol_comparison", "endpoint_analysis", "endpoint_comparison", "hypothesis", "quality", "state", "catalog"]
 
 
 def conversational_reply(question: str) -> tuple[str, list[str]] | None:
@@ -24,7 +24,7 @@ def conversational_reply(question: str) -> tuple[str, list[str]] | None:
         return "不客气，有新的 protocol 或数据问题可以继续讨论。", []
     if re.fullmatch(r"你(?:能|可以)(?:做什么|帮我什么|做哪些分析)|你有哪些功能|你是谁|what can you do|help", text):
         from protocol_optimization_agent.agents.actions import action_registry
-        labels = {"protocol.compare": "protocol 差异比较", "protocol.steps": "步骤与来源查询",
+        labels = {"data.catalog": "可用数据目录查询", "protocol.compare": "protocol 差异比较", "protocol.steps": "步骤与来源查询",
                   "data.assess": "数据质量检查", "phenotype.gene_expression": "基因表达查询",
                   "phenotype.cell_composition": "细胞组成分析", "phenotype.differential_expression": "差异表达分析",
                   "phenotype.beta_maturity": "成熟度评分", "hypothesis.generate": "待验证优化假说"}
@@ -48,6 +48,8 @@ def question_goal(question: str) -> str:
         return "endpoint_analysis"
     if action.id == "scientific.state":
         return "state"
+    if action.id == "data.catalog":
+        return "catalog"
     if action.id == "data.assess":
         return "quality"
     if re.search(r"比较|对比|区别|差异|compare|difference", question, re.I):
@@ -75,7 +77,9 @@ class PlanStep(BaseModel):
     def registered_action(self) -> PlanStep:
         action = get_action(self.action_id)
         pending = {binding.input_path.split("/")[1] for binding in self.input_bindings}
-        missing = {key for key in action.required_inputs if self.inputs.get(key) in (None, "", [], {})}
+        from protocol_optimization_agent.agents.actions import required_action_inputs
+
+        missing = {key for key in required_action_inputs(action, self.inputs) if self.inputs.get(key) in (None, "", [], {})}
         action = validate_action_arguments(self.action_id, self.inputs, pending_inputs=pending | missing)
         paths = [binding.input_path for binding in self.input_bindings]
         if any(a == b or a.startswith(b + "/") or b.startswith(a + "/") for i, a in enumerate(paths) for b in paths[i + 1:]):
@@ -296,6 +300,10 @@ def inspect_result(
             gaps.append("requested_numeric_result_incomplete")
     if action_id == "data.assess" and not result.get("validation", {}).get("technical_qc", {}).get("passed"):
         gaps.append("technical_qc_missing_or_failed")
+    if action_id == "data.catalog" and (not isinstance(preview, dict)
+            or not isinstance(preview.get("configured"), bool)
+            or not isinstance(preview.get("datasets"), list) or not isinstance(preview.get("collections"), list)):
+        gaps.append("data_catalog_contract_invalid")
     protocol_result = preview if isinstance(preview, dict) else {}
     payload = protocol_result.get("tool_result", {})
     next_experiments = protocol_result.get("next_experiment_candidates", {})

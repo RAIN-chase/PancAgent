@@ -45,6 +45,27 @@ def fake_execute(monkeypatch, outputs):
     monkeypatch.setattr(orchestrator, "_build_chat_model_from_env", lambda: None)
 
 
+def test_workbench_scope_is_bounded_archived_and_survives_thread_followup(tmp_path, monkeypatch):
+    fake_execute(monkeypatch, [lookup(), lookup()])
+    graph = orchestrator.build_orchestrator_graph(compile_graph=False).compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "workbench"}}
+    request = initial(tmp_path)
+    context = {"dataset_ids": ["atlas"], "dataset_versions": ["atlas=v1"], "cell_types": ["beta"],
+               "result_refs": ['{"result_id":"previous","field_path":"/result_preview"}']}
+    request["request"]["workbench_context"] = context
+    first = graph.invoke(request, config)
+    assert first["request"]["workbench_context"] == context
+    archived = tmp_path / "users/alice/runs" / first["run_id"] / "workbench_context.json"
+    assert json.loads(archived.read_text()) == context
+    second = graph.invoke({"messages": [HumanMessage(content="Protocol A again")]}, config)
+    assert second["request"]["workbench_context"] == context
+    assert not second["request"]["session_summary"]["result_refs"] == context["result_refs"]
+    invalid = initial(tmp_path, run="invalid")
+    invalid["request"]["workbench_context"] = {"workspace_root": ["/someone-else"]}
+    with pytest.raises(ValueError, match="Undeclared memory fields"):
+        orchestrator._configure_node(invalid, {})
+
+
 def test_same_thread_recovers_after_new_graph_and_new_run(tmp_path, monkeypatch):
     comparison = {"status": "ok", "evidence_refs": [], "scientific_preconditions": {}, "result_preview": {
         "protocol_id_a": "p1", "protocol_id_b": "p2", "tool_result": {"feature_differences": [], "factor_diff": [],

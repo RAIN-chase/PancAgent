@@ -8,7 +8,11 @@ ProtocolOptimizationAgent is a downstream multi-agent framework for improving pa
 
 The framework is intentionally small: three domain agents plus one lightweight orchestrator, sharing a versioned Scientific World Model.
 
-The primary `orchestrator` graph now follows a validated plan, task-specific evidence checks, bounded revision and deterministic report synthesis. Plans, step results, stopping reasons and saved numeric bindings are visible in the existing chat UI. See [planned scientific analysis](docs/planned_scientific_analysis.md) for contracts, statistical boundaries and regression commands.
+The primary `orchestrator` graph now follows a validated plan, task-specific evidence checks, bounded revision and deterministic report synthesis. Plans, step results, stopping reasons and saved numeric bindings are visible in the research workbench. See [planned scientific analysis](docs/planned_scientific_analysis.md) for contracts, statistical boundaries and regression commands.
+
+The [research workbench](docs/research_workbench.md) retains Next.js and LangGraph streaming while separating protocol comparisons, phenotype results, hypotheses, run history and source evidence from the expandable conversation panel. It inspects saved structured results without reconstructing measurements from Markdown.
+
+The [multi-protocol comparison and h5ad catalog](docs/data_catalog_and_multi_compare.md) describes N-object comparisons, reference/public/user datasets, Linux path configuration, transfer states and version publication.
 
 The [thin Orchestrator refactor](docs/thin_orchestrator_refactor.md) documents domain tool ownership, retired PA-only interfaces and explicitly enabled experimental-feedback APIs.
 
@@ -42,7 +46,7 @@ backend/
   tests/
 
 frontend/
-  src/                      # Next.js agent-chat-ui
+  src/                      # Next.js research workbench and LangGraph conversation
   README.md
 
 configs/
@@ -53,7 +57,7 @@ docs/
 
 Layer responsibilities:
 
-- `frontend/`: agent-chat-ui Next.js UI. It connects to LangGraph Server for chat and tool-call visualization.
+- `frontend/`: Next.js research workbench. It connects to LangGraph Server for conversation, saved results and traceable scientific evidence.
 - `backend API`: connects frontend requests to local Agent/query operations.
 - `LangGraph`: performs the actual agent work inside the backend.
 - `ProtocolAnalysisAgent`: already runs as an executable LangGraph `StateGraph`.

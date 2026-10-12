@@ -30,6 +30,13 @@ import { authHeaders } from "./client";
 export type StateType = {
   messages: Message[];
   ui?: UIMessage[];
+  project_id?: string;
+  run_id?: string;
+  request?: {
+    session_summary?: Record<string, unknown>;
+    workbench_context?: Record<string, string[]>;
+    memory_update?: Record<string, string[]>;
+  };
   plan?: {
     question: string;
     target_metrics?: string[];
@@ -73,6 +80,7 @@ const useTypedStream = useStream<
       messages?: Message[] | Message | string;
       ui?: (UIMessage | RemoveUIMessage)[] | UIMessage | RemoveUIMessage;
       context?: Record<string, unknown>;
+      request?: StateType["request"];
     };
     CustomEventType: UIMessage | RemoveUIMessage;
   }
@@ -126,6 +134,7 @@ const StreamSession = ({
     defaultHeaders: authHeaders(apiKey, authScheme),
     threadId: threadId ?? null,
     fetchStateHistory: true,
+    reconnectOnMount: true,
     onCustomEvent: (event, options) => {
       if (isUIMessage(event) || isRemoveUIMessage(event)) {
         options.mutate((prev) => {
@@ -169,7 +178,7 @@ const StreamSession = ({
 
 // Default values for the form
 const DEFAULT_API_URL = "http://localhost:2024";
-const DEFAULT_ASSISTANT_ID = "agent";
+const DEFAULT_ASSISTANT_ID = "orchestrator";
 const AGENT_BUILDER_AUTH_SCHEME = "langsmith-api-key";
 
 export const StreamProvider: React.FC<{ children: ReactNode }> = ({
@@ -226,13 +235,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
             <div className="flex flex-col items-start gap-2">
               <LangGraphLogoSVG className="h-7" />
               <h1 className="text-xl font-semibold tracking-tight">
-                Agent Chat
+                PancAgent
               </h1>
             </div>
-            <p className="text-muted-foreground">
-              Welcome to Agent Chat! Before you get started, you need to enter
-              the URL of the deployment and the assistant / graph ID.
-            </p>
+            <p className="text-muted-foreground">连接科研分析服务</p>
           </div>
           <form
             onSubmit={(e) => {

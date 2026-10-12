@@ -197,7 +197,7 @@ def record_comparison_claim(store: ScientificWorldModel, result: dict[str, Any],
     comparison = result.get("tool_result", {})
     if result.get("intent") != "compare_protocols" or comparison.get("status") != "ok":
         return
-    ids = [comparison.get(key, {}).get("protocol_id", "") for key in ("protocol_a", "protocol_b")]
+    ids = comparison.get("protocol_ids") or [comparison.get(key, {}).get("protocol_id", "") for key in ("protocol_a", "protocol_b")]
     refs = [{"protocol_id": protocol_id, "operation": "deterministic_feature_comparison"} for protocol_id in ids]
     observations = {
         "protocol_ids": ids,
@@ -207,7 +207,7 @@ def record_comparison_claim(store: ScientificWorldModel, result: dict[str, Any],
     evidence = _evidence(store, "protocol", refs, observations)
     claim = Claim(
         id=stable_id("claim", observations),
-        statement=f"Structured features differ between {ids[0]} and {ids[1]}.",
+        statement=f"Structured feature comparison for {', '.join(ids)}; differences are recorded in the result.",
         evidence_for=[evidence.id],
         scope={"protocol_ids": ids, "interpretation": "descriptive_only"},
         caveats=["Differences do not establish causal phenotype effects."],
