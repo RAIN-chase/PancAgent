@@ -17,6 +17,9 @@ def main() -> None:
     ingest.add_argument("--registry", type=Path, required=True)
     verify = commands.add_parser("verify")
     verify.add_argument("--run-dir", type=Path, required=True)
+    preview = commands.add_parser("export-preview", help="Export a local, read-only workbench preview")
+    preview.add_argument("--run-dir", type=Path, required=True)
+    preview.add_argument("--output", type=Path, required=True)
     publish = commands.add_parser("publish-catalog")
     publish.add_argument("--catalog", type=Path, required=True)
     publish.add_argument("--dataset-id", required=True)
@@ -24,9 +27,31 @@ def main() -> None:
     if args.command == "register-input":
         print(json.dumps(register_dataset(args.source, args.storage, args.registry), indent=2))
         return
+    if args.command == "export-preview":
+        from protocol_optimization_agent.science.reporting import saved_result
+
+        root = args.run_dir.resolve()
+        if args.output.resolve().is_relative_to(root):
+            raise ValueError("Preview output must be outside the archive")
+        bundle = json.loads((root / "bundle_manifest.json").read_text(encoding="utf-8"))
+        report_path = root / "final_report.json"
+        if not report_path.resolve().is_relative_to(root) or file_hash(report_path) != bundle["files"]["final_report.json"]:
+            raise ValueError("Archived report checksum mismatch")
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        messages = []
+        for ref in report["complete_results"]["result_refs"]:
+            result = saved_result(ref, root)
+            messages.append({"type": "tool", "content": json.dumps({
+                **result, "run_id": report["run_id"], "result_refs": [ref],
+            })})
+        messages.append({"type": "ai", "additional_kwargs": {"analysis_report": report}})
+        with args.output.open("x", encoding="utf-8") as handle:
+            json.dump({"messages": messages}, handle, ensure_ascii=False)
+        return
     if args.command == "publish-catalog":
-        from protocol_optimization_agent.runtime.archive import atomic_json
         import h5py
+
+        from protocol_optimization_agent.runtime.archive import atomic_json
 
         catalog = json.loads(args.catalog.read_text(encoding="utf-8"))
         entries = [row for row in catalog["datasets"] if row["dataset_id"] == args.dataset_id]

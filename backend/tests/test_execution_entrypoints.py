@@ -41,4 +41,5 @@ def test_public_execution_entrypoints_remain_stable() -> None:
     variables = [line.split("=", 1)[0] for line in (root / ".env.example").read_text(encoding="utf-8").splitlines()
                  if line and not line.startswith("#") and "=" in line]
     assert set(variables) == set(expected["environment_variables"]) | {
-        "PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED", "PROTOCOL_DATA_CATALOG"}
+        "PROTOCOL_EXPERIMENTAL_FEEDBACK_ENABLED", "PROTOCOL_DATA_CATALOG",
+        "PROTOCOL_CODE_EXECUTION", "PROTOCOL_CODE_IMAGE"}

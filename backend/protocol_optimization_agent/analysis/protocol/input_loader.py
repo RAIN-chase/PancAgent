@@ -117,6 +117,7 @@ def load_protocol_analysis_inputs(input_dir: Path) -> dict[str, Any]:
                     )
                     events.append(event)
     return {
+        "raw_protocol_records": records,
         "protocol_records": protocols,
         "factor_events": events,
         "source_identity_rows": identities,

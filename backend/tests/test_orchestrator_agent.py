@@ -5,7 +5,7 @@ from pathlib import Path
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from protocol_optimization_agent.agents.data_analysis import data_analysis_agent
+from protocol_optimization_agent.agents.data_actions import data_analysis_agent
 from protocol_optimization_agent.agents.orchestrator import build_orchestrator_graph
 from protocol_optimization_agent.agents.protocol_optimizing import protocol_optimizing_agent
 

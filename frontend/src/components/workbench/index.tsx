@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { parseAsBoolean, useQueryState } from "nuqs";
+import { parseAsBoolean, parseAsStringLiteral, useQueryState } from "nuqs";
 import {
   Activity,
   ArrowUpRight,
@@ -27,11 +27,12 @@ import {
   displayValue,
   downloadJson,
   object,
-  pointer,
   protocols,
   readArchive,
   rows,
   snapshot,
+  resolveEvidence,
+  resultKey,
   text,
   scopeFields,
   scopeMemoryUpdate,
@@ -45,6 +46,7 @@ import {
   MultiProtocolResult,
   type EvidenceSelection,
 } from "./results";
+import { EvidenceDrawer } from "./evidence-drawer";
 import { DataCatalog } from "./data-catalog";
 import { ResearchScopeBar } from "./research-scope";
 
@@ -72,7 +74,12 @@ function WorkbenchSession() {
   const [threadId, setThreadId] = useQueryState("threadId");
   const { getThreads, threads, setThreads, threadsLoading, setThreadsLoading } =
     useThreads();
-  const [view, setView] = useState("protocol");
+  const [view, setView] = useQueryState(
+    "view",
+    parseAsStringLiteral(views.map(({ id }) => id)).withDefault("protocol"),
+  );
+  const [runId, setRunId] = useQueryState("runId");
+  const [archiveRun, setArchiveRun] = useState("");
   const [chat, setChat] = useQueryState(
     "chat",
     parseAsBoolean.withDefault(true),
@@ -136,39 +143,73 @@ function WorkbenchSession() {
   const projectId = archive
     ? "本地归档"
     : text(scope.project_id || stream.values.project_id) || "default";
-  const relevant = data.results.filter((result) =>
-    view === "protocol"
-      ? result.action.startsWith("protocol.")
-      : view === "phenotype"
-        ? result.action.startsWith("phenotype.") ||
-          result.action === "data.assess"
-        : view === "hypothesis"
-          ? ["hypothesis.generate", "experiment.propose"].includes(
-              result.action,
-            )
-          : true,
+  const activeRun = archive ? archiveRun : runId;
+  const scopedReports = data.reports.filter(
+    (report) => !activeRun || report.run_id === activeRun,
   );
+  const selectRun = (id: string) => {
+    if (archive) setArchiveRun(id);
+    else void setRunId(id || null);
+    setSelectedId("");
+    setEvidence(null);
+  };
+  const runIds = [
+    ...new Set(
+      [
+        ...data.reports.map((report) => text(report.run_id)),
+        ...data.results.map((result) => result.runId),
+      ].filter(Boolean),
+    ),
+  ];
+  const relevant = data.results
+    .filter((result) => !activeRun || result.runId === activeRun)
+    .filter((result) =>
+      view === "protocol"
+        ? result.action.startsWith("protocol.")
+        : view === "phenotype"
+          ? result.action.startsWith("phenotype.") ||
+            result.action === "data.assess" ||
+            result.action === "data.exploratory_sensitivity"
+          : view === "hypothesis"
+            ? ["hypothesis.generate", "experiment.propose"].includes(
+                result.action,
+              )
+            : true,
+    );
   const selected =
-    relevant.find((result) => result.id === selectedId) ?? relevant.at(-1);
+    relevant.find((result) => resultKey(result) === selectedId) ??
+    relevant.at(-1);
   const latestReport = selected
     ? data.reports.findLast((report) => report.run_id === selected.runId)
-    : data.reports.at(-1);
+    : activeRun
+      ? data.reports.findLast((report) => report.run_id === activeRun)
+      : data.reports.at(-1);
   const boundValues = rows(latestReport?.display_quantitative_bindings).map(
     (binding) => {
-      const result = data.results.find((item) => item.id === binding.result_id);
-      try {
-        return {
-          binding,
-          result,
-          value: result
-            ? pointer(result.value, text(binding.field_path))
-            : "引用结果未载入",
-        };
-      } catch {
-        return { binding, result: undefined, value: "引用字段未载入" };
-      }
+      const resolved = resolveEvidence(
+        data.results,
+        text(latestReport?.run_id),
+        binding,
+      );
+      return {
+        binding,
+        result: resolved.result,
+        value: resolved.error ?? resolved.value,
+      };
     },
   );
+  const newThread = () => {
+    void setThreadId(null);
+    void setRunId(null);
+    setArchive(null);
+    setChosen([]);
+    setInput("");
+    setResearchScope(null);
+    setFollowup(null);
+    setSelectedId("");
+    setEvidence(null);
+    void setChat(true);
+  };
   const ask = (question: string) => {
     if (!archive) {
       setInput(question);
@@ -220,6 +261,7 @@ function WorkbenchSession() {
       if (!imported.results.length && !imported.reports.length)
         throw new Error("文件中没有支持的结果或报告。");
       setArchive(imported);
+      setArchiveRun("");
       setChosen([]);
       setArchiveName(file.name);
       setSelectedId("");
@@ -230,15 +272,6 @@ function WorkbenchSession() {
       setError(err instanceof Error ? err.message : "无法读取归档文件");
     }
   };
-  let evidenceValue: unknown;
-  try {
-    evidenceValue = evidence
-      ? pointer(evidence.result.value, evidence.path)
-      : null;
-  } catch {
-    evidenceValue = "字段未载入；不推算缺失结果。";
-  }
-
   return (
     <div className="workbench">
       <aside
@@ -281,17 +314,7 @@ function WorkbenchSession() {
         <button
           className="wb-new"
           disabled={stream.isLoading}
-          onClick={() => {
-            setThreadId(null);
-            setArchive(null);
-            setChosen([]);
-            setSelectedId("");
-            setEvidence(null);
-            setInput("");
-            setResearchScope(null);
-            setFollowup(null);
-            setChat(true);
-          }}
+          onClick={newThread}
         >
           <SquarePen size={16} /> 新建会话
         </button>
@@ -320,17 +343,7 @@ function WorkbenchSession() {
               title="新建会话"
               aria-label="新建会话"
               disabled={stream.isLoading}
-              onClick={() => {
-                setThreadId(null);
-                setArchive(null);
-                setChosen([]);
-                setInput("");
-                setResearchScope(null);
-                setFollowup(null);
-                setSelectedId("");
-                setEvidence(null);
-                setChat(true);
-              }}
+              onClick={newThread}
             >
               <SquarePen size={17} />
             </button>
@@ -638,7 +651,7 @@ function WorkbenchSession() {
                           );
                         });
                         if (existing) {
-                          setSelectedId(existing.id);
+                          setSelectedId(resultKey(existing));
                           setEvidence(null);
                         } else if (!archive)
                           ask(
@@ -672,7 +685,7 @@ function WorkbenchSession() {
                     已保存结果
                     <select
                       aria-label="已保存结果"
-                      value={selected?.id ?? ""}
+                      value={selected ? resultKey(selected) : ""}
                       onChange={(e) => {
                         setSelectedId(e.target.value);
                         setEvidence(null);
@@ -680,8 +693,8 @@ function WorkbenchSession() {
                     >
                       {relevant.map((result) => (
                         <option
-                          key={result.id}
-                          value={result.id}
+                          key={resultKey(result)}
+                          value={resultKey(result)}
                         >
                           {result.action} · {result.runId} · {result.id}
                         </option>
@@ -703,19 +716,19 @@ function WorkbenchSession() {
                       ? "尚无 Protocol 比较结果"
                       : view === "phenotype"
                         ? "尚无已计算的表型结果"
-                        : "尚无待验证假说"}
+                        : "尚无待验证假说。先完成 Protocol 比较和表型分析，并确认结果可按协议版本与终点关联。"}
                   </Empty>
                 ) : view === "protocol" &&
                   Array.isArray(comparison(selected).protocols) &&
                   comparison(selected).event_step_diff ? (
                   <MultiProtocolResult
-                    key={selected.id}
+                    key={resultKey(selected)}
                     result={selected}
                     onInspect={inspect}
                   />
                 ) : view === "protocol" && comparison(selected).protocol_a ? (
                   <ProtocolResult
-                    key={selected.id}
+                    key={resultKey(selected)}
                     result={selected}
                     onInspect={inspect}
                     onFollowup={
@@ -727,12 +740,34 @@ function WorkbenchSession() {
                   />
                 ) : (
                   <DomainResult
-                    key={selected.id}
+                    key={resultKey(selected)}
                     result={selected}
                     onInspect={inspect}
                   />
                 )}
               </>
+            )}
+            {(runIds.length > 0 || activeRun) && (
+              <label className="wb-result-select">
+                运行范围
+                <select
+                  value={activeRun || ""}
+                  onChange={(event) => selectRun(event.target.value)}
+                >
+                  <option value="">全部已载入运行</option>
+                  {activeRun && !runIds.includes(activeRun) && (
+                    <option value={activeRun}>未载入 · {activeRun}</option>
+                  )}
+                  {runIds.map((id) => (
+                    <option
+                      key={id}
+                      value={id}
+                    >
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
             {view === "runs" && (
               <>
@@ -753,9 +788,9 @@ function WorkbenchSession() {
                   </section>
                 )}
                 <section className="wb-band">
-                  <h2>已归档报告</h2>
-                  {data.reports.length ? (
-                    data.reports.map((report, index) => (
+                  <h2>已载入报告</h2>
+                  {scopedReports.length ? (
+                    scopedReports.map((report, index) => (
                       <article
                         className="wb-report"
                         key={`${text(report.run_id)}-${index}`}
@@ -767,12 +802,21 @@ function WorkbenchSession() {
                           </span>
                           <button
                             className="wb-icon"
-                            title="下载报告 JSON"
-                            aria-label="下载报告 JSON"
+                            title="查看本次运行证据"
+                            aria-label="查看本次运行证据"
+                            disabled={!report.run_id}
+                            onClick={() => selectRun(text(report.run_id))}
+                          >
+                            <ArrowUpRight size={16} />
+                          </button>
+                          <button
+                            className="wb-icon"
+                            title="导出报告预览 JSON"
+                            aria-label="导出报告预览 JSON"
                             onClick={() =>
                               downloadJson(
                                 report,
-                                `report_${text(report.run_id)}.json`,
+                                `report_preview_${text(report.run_id)}.json`,
                               )
                             }
                           >
@@ -818,7 +862,10 @@ function WorkbenchSession() {
                         className="wb-history-row"
                         key={item.thread_id}
                         disabled={stream.isLoading}
-                        onClick={() => setThreadId(item.thread_id)}
+                        onClick={() => {
+                          void setRunId(null);
+                          void setThreadId(item.thread_id);
+                        }}
                       >
                         <History size={15} />
                         <span>
@@ -837,7 +884,7 @@ function WorkbenchSession() {
                 )}
               </>
             )}
-            {latestReport && view !== "runs" && (
+            {latestReport && (view !== "runs" || activeRun) && (
               <section className="wb-band">
                 <h2>本次问题结论</h2>
                 {rows(latestReport.conclusions).map((claim, index) => (
@@ -848,6 +895,44 @@ function WorkbenchSession() {
                     <small>{text(claim.evidence_level)}</small>
                     <p>{text(claim.claim)}</p>
                     <p className="wb-muted">{text(claim.explanation)}</p>
+                    <div className="wb-toolbar">
+                      {(["supporting_refs", "opposing_refs"] as const).flatMap(
+                        (kind) =>
+                          rows(claim[kind]).map((citation, refIndex) => {
+                            const resolved = resolveEvidence(
+                              data.results,
+                              text(latestReport.run_id),
+                              citation,
+                            );
+                            const result = resolved.result;
+                            return (
+                              <button
+                                className="wb-link"
+                                key={`${kind}-${refIndex}`}
+                                disabled={!result}
+                                title={
+                                  result
+                                    ? text(citation.field_path) ||
+                                      "完整保存结果"
+                                    : resolved.error
+                                }
+                                onClick={() =>
+                                  result &&
+                                  inspect({
+                                    result,
+                                    path: text(citation.field_path),
+                                  })
+                                }
+                              >
+                                {kind === "supporting_refs"
+                                  ? "支持依据"
+                                  : "反对依据"}{" "}
+                                {refIndex + 1} <ArrowUpRight size={14} />
+                              </button>
+                            );
+                          }),
+                      )}
+                    </div>
                     <details>
                       <summary>支持、反对证据与限制</summary>
                       <pre>
@@ -919,67 +1004,15 @@ function WorkbenchSession() {
             )}
           </main>
           {evidence && (
-            <aside
-              className="wb-evidence"
-              aria-label="来源证据"
-            >
-              <header>
-                <strong>来源证据</strong>
-                <button
-                  className="wb-icon"
-                  title="关闭证据"
-                  aria-label="关闭证据"
-                  onClick={() => {
-                    setEvidence(null);
-                    if (!archive) setChat(true);
-                  }}
-                >
-                  <X size={17} />
-                </button>
-              </header>
-              {!archive && (
-                <button
-                  className="wb-link"
-                  onClick={() => askResult(evidence)}
-                >
-                  <MessageSquare size={15} /> 基于此字段追问
-                </button>
-              )}
-              <dl className="wb-context">
-                {Object.entries({
-                  result_id: evidence.result.id,
-                  run_id: evidence.result.runId,
-                  field_path: evidence.path,
-                  input_version: evidence.result.ref.input_version,
-                  sha256: evidence.result.ref.sha256,
-                  tool_version: evidence.result.ref.tool_version,
-                  parameters: evidence.result.ref.parameters,
-                }).map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{key}</dt>
-                    <dd>{displayValue(value)}</dd>
-                  </div>
-                ))}
-              </dl>
-              <h3>保存字段</h3>
-              <pre>{JSON.stringify(evidenceValue, null, 2)}</pre>
-              <h3>结果级来源引用</h3>
-              <pre>
-                {JSON.stringify(
-                  evidence.result.value.evidence_refs ?? [],
-                  null,
-                  2,
-                )}
-              </pre>
-              <h3>限制</h3>
-              <pre>
-                {JSON.stringify(
-                  evidence.result.value.confidence_caveats ?? [],
-                  null,
-                  2,
-                )}
-              </pre>
-            </aside>
+            <EvidenceDrawer
+              evidence={evidence}
+              onSelect={setEvidence}
+              onClose={() => {
+                setEvidence(null);
+                if (!archive) void setChat(true);
+              }}
+              onFollowup={archive ? undefined : askResult}
+            />
           )}
           {chat && !archive && (
             <div className="wb-chat-drawer">

@@ -26,6 +26,7 @@ from protocol_optimization_agent.analysis.protocol.comparison import (
     _build_protocol_embeddings_and_clusters,
     _build_protocol_relationships,
 )
+from protocol_optimization_agent.analysis.protocol.coverage_ledger import build_coverage_ledger
 from protocol_optimization_agent.analysis.protocol.feature_compiler import (
     _build_predefined_quantification_registry,
     _build_protocol_feature_matrix,
@@ -65,6 +66,10 @@ from protocol_optimization_agent.science.state import ScientificWorldModel
 
 class ProtocolAnalysisState(TypedDict, total=False):
     protocol_records: list[dict[str, Any]]
+    raw_protocol_records: list[dict[str, Any]]
+    original_factor_events: list[dict[str, Any]]
+    formal_source: bool
+    input_coverage_ledger: dict[str, Any]
     factor_events: list[dict[str, Any]]
     source_identity_rows: list[dict[str, Any]]
     schema_validation_report: dict[str, Any]
@@ -128,9 +133,13 @@ class ProtocolAnalysisAgent:
         protocol_records: list[dict[str, Any]],
         factor_events: list[dict[str, Any]],
         source_identity_rows: list[dict[str, Any]] | None = None,
+        *, raw_protocol_records: list[dict[str, Any]] | None = None,
     ) -> dict[str, Path]:
         initial_state: ProtocolAnalysisState = {
             "protocol_records": protocol_records,
+            "raw_protocol_records": raw_protocol_records if raw_protocol_records is not None else protocol_records,
+            "original_factor_events": factor_events,
+            "formal_source": raw_protocol_records is not None,
             "factor_events": factor_events,
             "source_identity_rows": source_identity_rows or [],
             "step_log": [],
@@ -434,15 +443,23 @@ class ProtocolAnalysisAgent:
         llm_audit_report["normalization_report"] = state.get("normalization_report", {})
         llm_audit_report["semantic_report"] = state.get("semantic_report", {})
         llm_audit_report["step_semantic_audit"] = state.get("step_semantic_audit", {})
+        ledger = build_coverage_ledger(state.get("raw_protocol_records", []), state.get("original_factor_events", []),
+            state.get("factor_events", []), state.get("filtered_events", []), state.get("accepted_protocol_ids", set()),
+            state.get("event_filter_report", {}), state.get("schema_validation_report", {}), state.get("field_quantification_map", {}),
+            formal_source=state.get("formal_source", False))
+        llm_audit_report["input_coverage"] = {key: value for key, value in ledger.items() if key not in {"units", "schema_findings"}}
         return {
             **state,
             "llm_audit_report": llm_audit_report,
+            "input_coverage_ledger": ledger,
             "step_log": _append_step(state, "quality_and_evidence_auditor"),
         }
 
     @audited_operation
     def _node_export_results(self, state: ProtocolAnalysisState) -> ProtocolAnalysisState:
         outputs = self._output_paths()
+        write_json(outputs["raw_protocol_input"], state.get("raw_protocol_records", []))
+        write_json(outputs["input_coverage_ledger"], state.get("input_coverage_ledger", {}))
         write_json(outputs["protocol_factor_difference_report"], state.get("difference_report", {}))
         write_csv_dicts(outputs["stage_factor_matrix_or_events_summary"], state.get("stage_rows", []))
         write_json(outputs["schema_validation_report"], state.get("schema_validation_report", {}))
@@ -509,6 +526,8 @@ class ProtocolAnalysisAgent:
 
     def _output_paths(self) -> dict[str, Path]:
         return {
+            "raw_protocol_input": self.output_dir / "raw_protocol_input.json",
+            "input_coverage_ledger": self.output_dir / "input_coverage_ledger.json",
             "protocol_factor_difference_report": self.output_dir / "protocol_factor_difference_report.json",
             "stage_factor_matrix_or_events_summary": self.output_dir / "stage_factor_matrix_or_events_summary.csv",
             "protocol_quality_filter_report": self.output_dir / "protocol_quality_filter_report.json",
@@ -600,17 +619,24 @@ class ProtocolAnalysisAgent:
 
         kept: list[dict[str, Any]] = []
         rejected: Counter[str] = Counter()
+        decisions = []
+        def decision(event, reason):
+            decisions.append({"event_id": event.get("event_id", ""), "protocol_id": event.get("protocol_id", ""),
+                              "source_record_path": event.get("source_record_path", ""), "reason": reason})
         for event in factor_events:
             protocol_id = str(event.get("protocol_id") or "")
             if not _is_accepted_protocol(protocol_id, accepted_protocol_ids):
                 rejected["protocol_failed_quality_filter"] += 1
+                decision(event, "protocol_failed_quality_filter")
                 continue
             validation_status = str(event.get("validation_status") or "").strip()
             if allowed_statuses and validation_status not in allowed_statuses:
                 rejected[f"validation_status:{validation_status or 'missing'}"] += 1
+                decision(event, f"validation_status:{validation_status or 'missing'}")
                 continue
             if reject_unparsed and _has_unparsed_numeric_field(event):
                 rejected["unparsed_numeric_field"] += 1
+                decision(event, "unparsed_numeric_field")
                 continue
             factor_type = str(event.get("factor_type") or "").strip()
             if (
@@ -619,11 +645,14 @@ class ProtocolAnalysisAgent:
                 and not _has_text(event.get("evidence_quote"))
             ):
                 rejected["missing_evidence_quote_for_key_factor"] += 1
+                decision(event, "missing_evidence_quote_for_key_factor")
                 continue
             kept.append(dict(event))
+            decision(event, "kept")
 
         return kept, {
             "n_input_events": len(factor_events),
+            "decisions": decisions,
             "n_kept_events": len(kept),
             "n_rejected_events": sum(rejected.values()),
             "rejection_reasons": dict(rejected),

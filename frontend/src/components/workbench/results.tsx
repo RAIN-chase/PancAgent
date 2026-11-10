@@ -146,8 +146,8 @@ export function MultiProtocolResult({
         <h2>{ids.length} 套 Protocol 比较</h2>
         <button
           className="wb-icon"
-          title="下载完整工具结果"
-          aria-label="下载完整工具结果"
+          title="导出结果预览 JSON"
+          aria-label="导出结果预览 JSON"
           onClick={() => downloadJson(result.value, `result_${result.id}.json`)}
         >
           <Download size={16} />
@@ -307,8 +307,8 @@ export function ProtocolResult({
         <code>{result.id}</code>
         <button
           className="wb-icon"
-          title="下载完整工具结果"
-          aria-label="下载完整工具结果"
+          title="导出结果预览 JSON"
+          aria-label="导出结果预览 JSON"
           onClick={() => downloadJson(result.value, `result_${result.id}.json`)}
         >
           <Download size={16} />
@@ -448,21 +448,35 @@ export function DomainResult({
   onInspect: Inspect;
 }) {
   const preview = result.value.result_preview;
+  const sensitivity = result.action === "data.exploratory_sensitivity";
   const data = Array.isArray(preview)
     ? rows(preview)
-    : rows(object(preview).hypotheses);
+    : rows(object(preview)[sensitivity ? "groups" : "hypotheses"]);
   const path = Array.isArray(preview)
     ? "/result_preview"
-    : "/result_preview/hypotheses";
+    : sensitivity
+      ? "/result_preview/groups"
+      : "/result_preview/hypotheses";
   return (
     <>
       <div className="wb-toolbar wb-result-meta">
         <code>{result.action}</code>
         <span className="wb-status">{displayValue(result.value.status)}</span>
+        {sensitivity && (
+          <span className="wb-status">探索性 · 未晋升为正式工具</span>
+        )}
+        {rows(result.value.execution_artifacts).length > 0 && (
+          <button
+            className="wb-link"
+            onClick={() => onInspect({ result, path: "/execution_artifacts" })}
+          >
+            检查执行脚本与环境 <ArrowUpRight size={14} />
+          </button>
+        )}
         <button
           className="wb-icon"
-          title="下载完整工具结果"
-          aria-label="下载完整工具结果"
+          title="导出结果预览 JSON"
+          aria-label="导出结果预览 JSON"
           onClick={() => downloadJson(result.value, `result_${result.id}.json`)}
         >
           <Download size={16} />

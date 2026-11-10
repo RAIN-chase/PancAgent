@@ -20,6 +20,12 @@ availability. Local `TASK_OUTPUTS` describes table/field contracts only.
 Operations have separate execution methods in `agents/data_analysis.py`, reusing
 the deterministic functions in `analysis/phenotype/`.
 
+Conversation/action adaptation is in `agents/data_actions.py`: request translation,
+authorized manifest resolution, result filtering and evidence envelopes. The Action
+Registry calls `execute_data_action()` there; batch callers continue using
+`DataAnalysisAgent.run()`. Neither caller needs to inspect graph nodes or select CSV
+filenames. No forwarding exports remain in `data_analysis.py`.
+
 ## Selection
 
 `h5ad_config.requested_tasks` is the only task selector. Its default is

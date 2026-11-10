@@ -82,7 +82,13 @@ const report = {
       claim: "Fixture descriptive difference",
       evidence_level: "descriptive",
       explanation: "Fixture only",
-      supporting_refs: [],
+      supporting_refs: [
+        {
+          source_id: ref.result_id,
+          result_ref: ref,
+          field_path: "/result_preview/tool_result/feature_differences/0",
+        },
+      ],
       opposing_refs: [{ source_id: "fixture-counterevidence" }],
       limitations: ["Not causal"],
     },

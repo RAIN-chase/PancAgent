@@ -104,6 +104,21 @@ class Hypothesis(Claim):
     competing_explanations: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class MethodExperience(ScientificRecord):
+    classification: Literal["method_experience"] = "method_experience"
+    action_id: str
+    tool_version: str
+    code_version: str
+    outcome: Literal["succeeded", "failed", "partial"]
+    prerequisites: dict[str, Any] = Field(default_factory=dict)
+    validation: dict[str, Any] = Field(default_factory=dict)
+    failure_reasons: list[str] = Field(default_factory=list)
+    source_refs: list[dict[str, Any]] = Field(min_length=1)
+    originating_run_id: str
+    limitations: list[str] = Field(default_factory=list)
+    reuse_policy: Literal["revalidate_current_inputs_not_biological_fact"] = "revalidate_current_inputs_not_biological_fact"
+
+
 class DecisionAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     expected_improvement: float = Field(ge=0, le=1)

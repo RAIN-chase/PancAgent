@@ -52,6 +52,8 @@ def question_goal(question: str) -> str:
         return "catalog"
     if action.id == "data.assess":
         return "quality"
+    if action.id == "data.exploratory_sensitivity":
+        return "endpoint_analysis"
     if re.search(r"比较|对比|区别|差异|compare|difference", question, re.I):
         return "protocol_comparison"
     return "lookup"
@@ -281,6 +283,50 @@ def step_signature(step: dict[str, Any], input_version: str, code_version: str) 
 SUCCESS_STATUSES = {"ok", "ok_cached_result", "optimization_ran", "ok_cached_optimization_outputs"}
 
 
+def failure_policy(result: dict[str, Any], *, usable: bool = False) -> dict[str, Any]:
+    """Classify explicit execution signals, never guess from exception text or model prose."""
+    status = str(result.get("status", "unknown"))
+    categories = {
+        "parameter_error": {"invalid_parameters", "invalid_request", "invalid_input", "validation_error"},
+        "tool_unavailable": {"unavailable", "dependency_missing", "isolation_unavailable", "tool_unavailable"},
+        "data_missing": {"inputs_missing", "needs_clarification", "h5ad_file_missing", "obs_column_missing", "expression_source_missing", "no_prior_data_analysis_outputs",
+                         "selected_analysis_output_missing", "no_matching_cached_result", "selected_analysis_not_computed"},
+        "scientific_precondition": {"evidence_insufficient", "not_comparable", "scientific_precheck_failed",
+                                    "insufficient_groups_for_de", "insufficient_cells_or_program_genes", "expression_source_conflict"},
+        "authorization": {"permission_denied", "unauthorized", "forbidden"},
+    }
+    category = "none" if usable else next((key for key, statuses in categories.items() if status in statuses), "unknown_failure")
+    operation = result.get("selected_operation") or result.get("structured_request", {}).get("operation")
+    details = [row.get("status", "unknown") for task in result.get("task_results", []) if task.get("task") == operation
+               for row in task.get("failures", [])]
+    detailed_categories = {key for code in details for key, statuses in categories.items() if code in statuses}
+    if not usable and details:
+        category = next(iter(detailed_categories)) if len(detailed_categories) == 1 and all(
+            any(code in statuses for statuses in categories.values()) for code in details) else "unknown_failure"
+    recovery = {"none": "continue", "parameter_error": "correct_parameters_once", "tool_unavailable": "alternative_tool_or_operator_setup",
+                "data_missing": "clarify_required_inputs", "scientific_precondition": "alternative_question_or_stop",
+                "authorization": "stop_no_bypass", "unknown_failure": "diagnose_or_stop"}
+    return {"category": category, "status": status, "recovery": recovery[category],
+            "task_failure_statuses": sorted(set(details)),
+            "automatic_retry": False, "max_parameter_repairs": 1 if category == "parameter_error" else 0}
+
+
+def validate_recovery_step(step: dict[str, Any], plan_steps: list[dict], records: list[dict]) -> None:
+    """A new step ID does not authorize repeating failed work under the same conditions."""
+    prior_steps = {row["id"]: row for row in plan_steps}
+    failures = [row for row in records if row["action_id"] == step["action_id"] and not row.get("usable")
+                and row.get("executed")]
+    for record in failures:
+        policy = record.get("failure", {})
+        category = policy.get("category", "unknown_failure")
+        old = prior_steps.get(record["step_id"], {})
+        if category == "parameter_error":
+            if old.get("inputs") == step.get("inputs") or len(failures) > 1:
+                raise ValueError("Parameter repair requires changed inputs and is limited to one attempt per action")
+        elif category in {"tool_unavailable", "authorization"} or old.get("inputs") == step.get("inputs"):
+            raise ValueError("Failed action requires " + policy.get("recovery", "diagnosis") + "; blind retry is not allowed")
+
+
 def inspect_result(
     result: dict[str, Any], action_id: str, expected_outputs: list[str] | None = None
 ) -> tuple[bool, list[str], str]:
@@ -300,6 +346,11 @@ def inspect_result(
             gaps.append("requested_numeric_result_incomplete")
     if action_id == "data.assess" and not result.get("validation", {}).get("technical_qc", {}).get("passed"):
         gaps.append("technical_qc_missing_or_failed")
+    if action_id == "data.exploratory_sensitivity" and not all(
+        result.get("validation", {}).get("scientific_checks", {}).get(key) is True
+        for key in ("numeric_recomputed", "sample_metadata_consistent", "input_version_unchanged")
+    ):
+        gaps.append("exploratory_sensitivity_validation_failed")
     if action_id == "data.catalog" and (not isinstance(preview, dict)
             or not isinstance(preview.get("configured"), bool)
             or not isinstance(preview.get("datasets"), list) or not isinstance(preview.get("collections"), list)):

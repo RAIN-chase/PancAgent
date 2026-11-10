@@ -213,6 +213,7 @@ def create_app(*, enable_experimental_feedback: bool | None = None) -> Any:
             protocol_records=loaded["protocol_records"],
             factor_events=loaded["factor_events"],
             source_identity_rows=loaded["source_identity_rows"],
+            raw_protocol_records=loaded["raw_protocol_records"],
         )
         return {
             "status": "ok",

@@ -1,0 +1,31 @@
+{
+  "schema_version": "research-pilot-v1",
+  "status": "pilot_questions_require_frozen_inputs_and_expert_gold",
+  "baselines": ["direct_same_model", "fixed_workflow", "full_agent"],
+  "cases": [
+    {"id":"R01","split":"development","study_ids":["nair_2019"],"input_mode":"versioned_data","question":"列出 protocol_021b0e733672 的阶段、阶段目标和原始步骤来源。"},
+    {"id":"R02","split":"development","study_ids":["zeng_2016"],"input_mode":"versioned_data","question":"protocol_0a09d2348120 中哪些操作具有触发条件，而不是固定天数？保留原文，不推断未报告时间。"},
+    {"id":"R03","split":"development","study_ids":["nair_2019","zeng_2016"],"input_mode":"versioned_data","question":"比较 protocol_021b0e733672 与 protocol_0a09d2348120 的试剂、浓度单位和对应阶段；明确未报告信息。"},
+    {"id":"R04","split":"development","study_ids":["nair_2019","zeng_2016"],"input_mode":"versioned_data","question":"这两套 protocol 的操作顺序与阶段依赖有什么差异？不能只比较矩阵列。"},
+    {"id":"R05","split":"development","study_ids":["nair_2019"],"input_mode":"versioned_data","question":"protocol_021b0e733672 中未进入特征矩阵的信息有哪些？分别列出过滤原因和待解析条件。"},
+    {"id":"R06","split":"development","study_ids":["zeng_2016"],"input_mode":"versioned_data","question":"仅有 protocol_0a09d2348120 的提取 JSON，是否能保证论文全文没有遗漏？说明可验证的覆盖范围。"},
+    {"id":"R07","split":"development","study_ids":["nair_2019","zeng_2016"],"input_mode":"versioned_data","question":"哪套 protocol 更好？我尚未指定终点、细胞系或采样时间。"},
+    {"id":"R08","split":"development","study_ids":["nair_2019"],"input_mode":"no_data","question":"请给出 protocol_021b0e733672 对应样本的 INS 平均表达量；当前不提供任何表达数据或既往结果。"},
+    {"id":"R09","split":"development","study_ids":["nair_2019"],"input_mode":"versioned_data","question":"查询对应样本中 beta 细胞的 INS、IAPP 表达，绑定样本、表达尺度和结果字段。"},
+    {"id":"R10","split":"development","study_ids":["zeng_2016"],"input_mode":"versioned_data","question":"计算对应样本 beta 细胞比例，按样本报告，不把细胞数当成生物学重复数。"},
+    {"id":"R11","split":"development","study_ids":["nair_2019","zeng_2016"],"input_mode":"versioned_data","question":"比较两组差异表达；先判断是否有独立生物学重复、适当表达层以及批次混杂。"},
+    {"id":"R12","split":"development","study_ids":["nair_2019"],"input_mode":"versioned_data","question":"同一供体处理前后的配对样本能否直接用非配对差异分析？如当前方法不支持，明确停止并说明。"},
+    {"id":"R13","split":"development","study_ids":["zeng_2016"],"input_mode":"versioned_data","question":"使用六个已登记 gene programs 计算成熟度，先核实原始 counts、细胞注释及基因覆盖。"},
+    {"id":"R14","split":"development","study_ids":["nair_2019"],"input_mode":"versioned_data","question":"对已有成熟度指标做生物学重复级留一敏感性分析，缺少重复映射时不要猜测。"},
+    {"id":"R15","split":"development","study_ids":["nair_2019","zeng_2016"],"input_mode":"versioned_data","question":"两份数据分别是 counts 和 log 表达，能否直接合并比较？未知归一化条件需要明确指出。"},
+    {"id":"R16","split":"development","study_ids":["nair_2019","zeng_2016"],"input_mode":"versioned_data","question":"结合 protocol 与表型提出可证伪的成熟度假说，保留反对证据；不要把关联当作因果。"},
+    {"id":"R17","split":"test","study_ids":["agulnick_2015","akgun_canan_2024","augsornworawat_2020"],"input_mode":"versioned_data","question":"比较 protocol_b3a0e7c527f9、protocol_1bbe0139012e、protocol_ad1206e65a2d 三套协议；全部对象都必须出现在步骤与证据比较中。"},
+    {"id":"R18","split":"test","study_ids":["agulnick_2015"],"input_mode":"versioned_data","question":"查明 protocol_b3a0e7c527f9 的浓度作用对象，区分培养基、预处理和实际细胞暴露。"},
+    {"id":"R19","split":"test","study_ids":["akgun_canan_2024"],"input_mode":"versioned_data","question":"核查 protocol_1bbe0139012e 的条件、重复操作和独创步骤，无法解析时保留原文及未知状态。"},
+    {"id":"R20","split":"test","study_ids":["augsornworawat_2020"],"input_mode":"no_data","question":"在未提供任何 h5ad、表型结果或实验反馈时，预测 protocol_ad1206e65a2d 的成熟度提升百分比。"},
+    {"id":"R21","split":"test","study_ids":["agulnick_2015","akgun_canan_2024"],"input_mode":"versioned_data","question":"两个竞争假说分别归因于因子本身和共同使用的另一个因子。哪些匹配对照结果能区分它们？无法识别时不要排名。"},
+    {"id":"R22","split":"test","study_ids":["augsornworawat_2020"],"input_mode":"versioned_data","question":"机制引用只有 PubMed 摘要且细胞类型不匹配，是否足以支持当前培养阶段的干预结论？"},
+    {"id":"R23","split":"deployment","study_ids":[],"input_mode":"versioned_data","question":"当前有哪些已登记数据可用？区分参考图谱、公共类器官、用户数据和传输中数据。"},
+    {"id":"R24","split":"deployment","study_ids":[],"input_mode":"no_data","question":"我没有上传 h5ad，是否仍可以探索公共数据？不要要求我提供服务器目录或暴露其他用户文件。"}
+  ]
+}

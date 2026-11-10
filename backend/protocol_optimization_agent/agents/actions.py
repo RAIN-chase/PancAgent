@@ -21,6 +21,7 @@ class ScientificAction(BaseModel):
     outputs: list[str]
     numeric_policy: str = "deterministic_tools_only"
     implementation: str
+    parallel_read_only: bool = False
     operation: str = ""
     routing_terms: list[str] = Field(default_factory=list)
     routing_priority: int = 0
@@ -29,6 +30,18 @@ class ScientificAction(BaseModel):
 
 ACTION_SPACE = [
     ScientificAction(
+        id="data.exploratory_sensitivity", agent="DA", inputs=["question", "request"], required_inputs=["request"],
+        execution_preconditions=["operator_enabled_rootless_docker_cgroup_v2", "pinned_local_image", "authorized_versioned_dataset"],
+        scientific_preconditions=["explicit_biological_replicate_mapping", "known_metric_scale", "trusted_numeric_recomputation"],
+        outputs=["numeric_results", "validation"], implementation="isolated_sample_sensitivity", operation="sensitivity",
+        routing_terms=["留一重复", "重复级敏感性", "leave-one-replicate-out"], routing_priority=25,
+        notes=["Opt-in only: default PROTOCOL_CODE_EXECUTION=disabled. No host execution fallback.",
+               "Use existing registered tools first. This fallback only supports leave_one_replicate_out_mean on numeric obs metrics.",
+               "request requires dataset_id, dataset_version, endpoint, metric_column, sample_column, replicate_column, study_column, scale, rationale.",
+               "Optional group_column, seed, candidate_code, max_repairs (0 or 1), budget. Never infer sample or replicate relationships.",
+               "Exploratory only. PA cannot use this code route; PO must delegate metric computation to DA. No automatic tool promotion."],
+    ),
+    ScientificAction(
         id="data.catalog", agent="Orchestrator", inputs=[], required_inputs=[],
         routing_terms=["有哪些数据", "有什么数据", "哪些数据可用", "可用数据", "可用的数据", "可访问的数据", "数据集清单", "数据目录", "数据清单",
                        "数据有哪些", "数据集有哪些", "有哪些h5ad", "有哪些 h5ad", "列出数据", "列出所有数据",
@@ -36,6 +49,7 @@ ACTION_SPACE = [
         routing_priority=15,
         execution_preconditions=["server_bound_user_and_project_context"], scientific_preconditions=[],
         outputs=["configured", "catalog_version", "collections", "datasets"], implementation="dataset_catalog",
+        parallel_read_only=True,
         notes=["Read-only listing of authorized registered datasets, versions and availability; no directory or dataset ID required.",
                "Query this before requesting a manifest for dataset discovery. Not configured or empty is an informative result.",
                "File readiness is not scientific QC, and no arbitrary server filesystem scan is permitted."],
@@ -44,12 +58,14 @@ ACTION_SPACE = [
         id="protocol.assess", agent="PA", inputs=["protocol_ids"], required_inputs=[],
         execution_preconditions=["authorized_PA_output_snapshot"], scientific_preconditions=["source_details_checked"],
         outputs=["protocol_assessments", "evidence_gaps", "matrix_release_gate"], implementation="assess_protocols",
+        parallel_read_only=True,
     ),
     ScientificAction(
         id="protocol.steps", agent="PA", inputs=["protocol_id", "stage_id"], required_inputs=["protocol_id"],
         execution_preconditions=["persisted_semantic_step_annotations"],
         scientific_preconditions=["source_support_and_parameter_scope_checked"],
         outputs=["semantic_steps", "evidence_refs"], implementation="ProtocolQueryEngine.get_protocol_steps",
+        parallel_read_only=True,
         notes=["Retrieve original operations, states, conditions and scoped parameters. Interpretations are not new facts."],
     ),
     ScientificAction(
@@ -64,6 +80,7 @@ ACTION_SPACE = [
         required_inputs=["protocol_ids", "endpoint"], execution_preconditions=["phenotype_ir_snapshot"],
         scientific_preconditions=["endpoint_scale_and_context_checked"],
         outputs=["cohorts", "observations", "evidence_gaps"], implementation="compare_endpoint",
+        parallel_read_only=True,
     ),
     ScientificAction(
         id="hypothesis.generate", agent="PO", inputs=["edits", "objective"], required_inputs=["edits", "objective"],
@@ -171,6 +188,7 @@ ACTION_SPACE = [
         scientific_preconditions=[],
         outputs=["versioned_world_model", "hypotheses", "conflicts", "history"],
         implementation="inspect_scientific_state",
+        parallel_read_only=True,
     ),
     ScientificAction(
         id="protocol.extract",
@@ -265,8 +283,8 @@ def validate_action_arguments(action_id: str, arguments: dict[str, Any], *, pend
 
 
 def execute_action(action_id: str, arguments: dict[str, Any], context: RunContext, *,
-                   protocol_output_dir: str, data_analysis_output_dir: str,
-                   optimization_output_dir: str, max_features: int) -> dict[str, Any]:
+                   protocol_output_dir: str = "", data_analysis_output_dir: str = "",
+                   optimization_output_dir: str = "", max_features: int = 40) -> dict[str, Any]:
     """Validate once and delegate to the domain owning the registered action."""
     action = get_action(action_id)
     if action.availability != "available":
@@ -293,12 +311,18 @@ def execute_action(action_id: str, arguments: dict[str, Any], context: RunContex
             limitations=["仅列出当前用户和项目可访问的已登记数据；不扫描任意服务器目录。",
                          "文件可读取不代表注释、表达尺度、重复结构或统计方法已通过科学验证。"])
     if action.agent == "PA":
+        if not protocol_output_dir:
+            raise ValueError("PA requires its protocol output directory")
         from protocol_optimization_agent.agents.protocol_analysis import execute_protocol_action
         return execute_protocol_action(action, arguments, context, protocol_output_dir, max_features)
     if action.agent == "DA":
-        from protocol_optimization_agent.agents.data_analysis import execute_data_action
+        if not data_analysis_output_dir:
+            raise ValueError("DA requires its data analysis output directory")
+        from protocol_optimization_agent.agents.data_actions import execute_data_action
         return execute_data_action(action, arguments, context, data_analysis_output_dir)
     if action.agent == "PO":
+        if not (protocol_output_dir and data_analysis_output_dir and optimization_output_dir):
+            raise ValueError("PO requires protocol, data analysis and optimization output directories")
         from protocol_optimization_agent.agents.protocol_optimizing import execute_optimization_action
         return execute_optimization_action(action, arguments, context, protocol_output_dir,
                                            data_analysis_output_dir, optimization_output_dir)

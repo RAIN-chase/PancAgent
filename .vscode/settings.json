@@ -1,0 +1,21 @@
+{
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/*.egg-info": true,
+    "**/node_modules": true,
+    "**/.next": true,
+    ".tmp": true,
+    ".langgraph_api": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/__pycache__": true,
+    ".tmp": true,
+    ".langgraph_api": true,
+    "runs/**": true,
+    "external_tools/**": true
+  }
+}

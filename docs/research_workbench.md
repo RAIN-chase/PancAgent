@@ -95,3 +95,21 @@ Browser tests check desktop/mobile layouts, unchanged downloads, evidence and
 counterevidence, presentation-only filtering, scope reset, actual SDK streaming,
 follow-up drafts and rejoining a run without resubmission. Provider computation
 and multi-user server authorization require separate integration verification.
+## Run Navigation and Evidence (2026-11-10)
+
+The workbench URL retains the view, thread and selected online run. The run
+selector and history report shortcut browse loaded results without calling a
+model. Local imports retain their own in-memory run selection and are read-only.
+Starting a new thread clears the selected run, draft and evidence selection.
+
+Report citations and quantitative fields resolve against the owning run,
+result ID, input version, SHA-256 and JSON field pointer. Missing results,
+mismatched versions and unloaded fields are not substituted from other runs.
+SHA-256 comparison checks reference consistency among loaded objects, not the
+original file bytes. Inspecting evidence is read-only; follow-up only drafts a
+question until explicitly submitted.
+
+Export buttons produce preview JSON from loaded objects, not an original artifact
+download. The run list is limited to results in the current loaded thread or
+local import. Cross-thread project archives, authenticated raw-byte downloads,
+server-side sessions and a same-origin streaming proxy are not implemented here.

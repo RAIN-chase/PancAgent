@@ -24,6 +24,43 @@ function load(file) {
   return module.exports;
 }
 const adapter = load("lib/workbench.ts");
+test("evidence is scoped to the exact run, result, version and field", () => {
+  const other = structuredClone(fixture.envelope);
+  other.run_id = "other-run";
+  other.result_refs[0].sha256 = "other-hash";
+  const { results } = adapter.snapshot([
+    ...fixture.messages,
+    { type: "tool", content: JSON.stringify(other) },
+  ]);
+  const ref = fixture.report.quantitative_bindings[0];
+  assert.equal(results.length, 2);
+  assert.equal(
+    adapter.resolveEvidence(results, "fixture-run", ref).value,
+    "3.000",
+  );
+  assert.match(
+    adapter.resolveEvidence(results, "other-run", ref).error,
+    /不匹配/,
+  );
+  assert.match(
+    adapter.resolveEvidence(results, "missing-run", ref).error,
+    /未载入/,
+  );
+  assert.match(
+    adapter.resolveEvidence(results, "fixture-run", {
+      ...ref,
+      input_version: "wrong",
+    }).error,
+    /不匹配/,
+  );
+  assert.match(
+    adapter.resolveEvidence(results, "fixture-run", {
+      ...ref,
+      field_path: "/missing",
+    }).error,
+    /字段未载入/,
+  );
+});
 test("only explicitly changed scope updates memory; blank defaults do not erase question targets", () => {
   assert.deepEqual(adapter.scopeMemoryUpdate({}, {}, false), {});
   assert.deepEqual(adapter.scopeMemoryUpdate({}, {}, true), {});
@@ -48,9 +85,28 @@ test("only explicitly changed scope updates memory; blank defaults do not erase 
     },
   );
 });
-const { ProtocolResult, MultiProtocolResult } = load(
+const { ProtocolResult, MultiProtocolResult, DomainResult } = load(
   "components/workbench/results.tsx",
 );
+
+test("sensitivity view preserves archived replicate values and exploratory label", () => {
+  const result = structuredClone(adapter.snapshot(fixture.messages).results[0]);
+  result.action = "data.exploratory_sensitivity";
+  result.value.execution_artifacts = [
+    { attempt: 0, script: "print('saved script')", read_only: true },
+  ];
+  result.value.result_preview = {
+    groups: [{ group: "beta", n_independent_replicates: 3, mean: "4.000" }],
+  };
+  const html = renderToStaticMarkup(
+    React.createElement(DomainResult, { result, onInspect() {} }),
+  );
+  assert.ok(html.includes("探索性"));
+  assert.ok(html.includes("未晋升为正式工具"));
+  assert.ok(html.includes("4.000"));
+  assert.ok(html.includes("n_independent_replicates"));
+  assert.ok(html.includes("检查执行脚本与环境"));
+});
 
 test("multi-protocol table renders every selected object and exact values", () => {
   const result = structuredClone(adapter.snapshot(fixture.messages).results[0]);

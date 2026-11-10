@@ -1,7 +1,6 @@
 import json
 
 import pytest
-
 from protocol_optimization_agent.agents.actions import validate_action_arguments
 from protocol_optimization_agent.analysis.protocol.query_engine import ProtocolQueryEngine
 from protocol_optimization_agent.runtime.data_catalog import catalog_manifest, dataset_catalog
@@ -93,6 +92,7 @@ def test_catalog_scope_transfer_and_metadata_only(tmp_path, monkeypatch):
 
 def test_authenticated_catalog_api_binds_identity_and_project(tmp_path, monkeypatch):
     import hashlib
+
     from fastapi.testclient import TestClient
     from protocol_optimization_agent.interfaces.api import create_app
 
@@ -146,7 +146,7 @@ def test_publish_catalog_hashes_without_copy_and_detects_changed_version(tmp_pat
 def test_da_can_inspect_public_catalog_without_upload_or_client_path(tmp_path, monkeypatch):
     import anndata
     import numpy as np
-    from protocol_optimization_agent.agents.data_analysis import data_analysis_agent
+    from protocol_optimization_agent.agents.data_actions import data_analysis_agent
 
     path = tmp_path / "public.h5ad"
     anndata.AnnData(np.ones((3, 2))).write_h5ad(path)

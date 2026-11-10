@@ -14,6 +14,7 @@ def assess_protocols(engine: Any, protocol_ids: list[str]) -> dict[str, Any]:
     selected = protocol_ids or [row["protocol_id"] for row in engine.matrix_rows]
     representations = read_jsonl(engine.output_dir / "standardized_protocol_representations.jsonl")
     annotations = read_jsonl(engine.output_dir / "semantic_step_annotations.jsonl")
+    ledger = read_json(engine.output_dir / "input_coverage_ledger.json")
     rows = []
     for protocol_id in selected:
         matrix = next((row for row in engine.matrix_rows if row["protocol_id"] == protocol_id), None)
@@ -45,6 +46,9 @@ def assess_protocols(engine: Any, protocol_ids: list[str]) -> dict[str, Any]:
                 "semantic_steps": semantic_steps,
                 "evidence_gaps": gaps,
                 "audit_findings": engine.get_audit_findings(protocol_id),
+                "input_coverage": ledger.get("protocols", {}).get(protocol_id, {"status": "not_available_recompile_required"}),
+                "input_coverage_issues": [unit for unit in ledger.get("units", []) if unit["protocol_id"] == protocol_id and unit["disposition"] in {"filtered", "pending_parse"}][:100],
+                "input_coverage_issue_details_truncated": sum(unit["protocol_id"] == protocol_id and unit["disposition"] in {"filtered", "pending_parse"} for unit in ledger.get("units", [])) > 100,
             }
         )
     return {
@@ -53,7 +57,9 @@ def assess_protocols(engine: Any, protocol_ids: list[str]) -> dict[str, Any]:
         "evidence_gaps": [gap for row in rows for gap in row["evidence_gaps"]],
         "matrix_release_gate": read_json(engine.output_dir / "matrix_release_gate_report.json"),
         "step_semantic_audit": read_json(engine.output_dir / "step_semantic_audit.json"),
-        "policy": "Missing extracted events never establish explicit non-use.",
+        "input_coverage_scope": ledger.get("scope", "unknown"),
+        "paper_fulltext_completeness": "not_evaluated",
+        "policy": "Missing extracted events never establish explicit non-use. Accounting for JSON does not establish complete semantic understanding or full-paper coverage.",
     }
 
 

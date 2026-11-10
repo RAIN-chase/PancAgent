@@ -160,6 +160,23 @@ const fixture = require("./fixtures/workbench.cjs");
         fullPage: true,
       });
       await page.getByRole("button", { name: "关闭证据", exact: true }).click();
+      assert.equal(
+        await page
+          .getByRole("button", { name: "反对依据 1", exact: true })
+          .isDisabled(),
+        true,
+      );
+      await page
+        .getByRole("button", { name: "支持依据 1", exact: true })
+        .click();
+      assert.ok(
+        (
+          await page
+            .getByRole("complementary", { name: "来源证据" })
+            .innerText()
+        ).includes("factor_duration"),
+      );
+      await page.getByRole("button", { name: "关闭证据", exact: true }).click();
       await page.getByRole("tab", { name: "步骤与事件" }).click();
       await page.getByRole("list", { name: "Protocol A 事件时间线" }).waitFor();
       await page.screenshot({
@@ -168,7 +185,7 @@ const fixture = require("./fixtures/workbench.cjs");
       });
       const downloading = page.waitForEvent("download");
       await page
-        .getByRole("button", { name: "下载完整工具结果", exact: true })
+        .getByRole("button", { name: "导出结果预览 JSON", exact: true })
         .click();
       const download = await downloading;
       assert.deepEqual(
@@ -192,7 +209,7 @@ const fixture = require("./fixtures/workbench.cjs");
         .click();
       assert.equal(
         await page
-          .getByRole("button", { name: "下载报告 JSON", exact: true })
+          .getByRole("button", { name: "导出报告预览 JSON", exact: true })
           .count(),
         1,
       );
@@ -439,7 +456,18 @@ const fixture = require("./fixtures/workbench.cjs");
         sessionStorage.setItem(`lg:stream:${threadId}`, runId),
       { threadId, runId },
     );
+    await page.getByLabel("运行范围").selectOption("fixture-run");
+    await page.waitForURL(
+      (url) => url.searchParams.get("runId") === "fixture-run",
+    );
     await page.reload();
+    await page
+      .getByRole("heading", { name: "假说与方案", exact: true })
+      .waitFor();
+    assert.equal(await page.getByLabel("运行范围").inputValue(), "fixture-run");
+    await page
+      .getByRole("button", { name: "Protocol 比较", exact: true })
+      .click();
     await page
       .getByRole("heading", { name: "Protocol Alpha", exact: true })
       .waitFor();
@@ -450,7 +478,10 @@ const fixture = require("./fixtures/workbench.cjs");
     );
     assert.equal(submitted, 1, "Reconnect must not create another run");
     assert.equal(joined, 1, "Reconnect joins existing run");
-    const closeChat = page.getByRole("button", { name: "收起对话", exact: true });
+    const closeChat = page.getByRole("button", {
+      name: "收起对话",
+      exact: true,
+    });
     if (await closeChat.isVisible()) await closeChat.click();
     await page.getByRole("button", { name: "查看第 1 条来源" }).click();
     await page
@@ -469,6 +500,7 @@ const fixture = require("./fixtures/workbench.cjs");
       .last()
       .click();
     await page.getByRole("textbox", { name: "研究问题" }).waitFor();
+    await page.waitForURL((url) => !url.searchParams.has("runId"));
     assert.equal(
       await page
         .getByRole("heading", { name: "Protocol Alpha", exact: true })

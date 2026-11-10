@@ -3,8 +3,12 @@ import json
 import pytest
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
-
-from protocol_optimization_agent.agents.actions import execute_action, get_action, select_action, validate_action_arguments
+from protocol_optimization_agent.agents.actions import (
+    execute_action,
+    get_action,
+    select_action,
+    validate_action_arguments,
+)
 from protocol_optimization_agent.agents.analysis_flow import inspect_result, question_goal
 from protocol_optimization_agent.agents.orchestrator import build_orchestrator_graph
 from protocol_optimization_agent.runtime.context import RunContext

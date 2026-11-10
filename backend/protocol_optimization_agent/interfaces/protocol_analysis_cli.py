@@ -78,6 +78,7 @@ def main() -> None:
                 protocol_records=loaded["protocol_records"],
                 factor_events=loaded["factor_events"],
                 source_identity_rows=loaded["source_identity_rows"],
+                raw_protocol_records=loaded["raw_protocol_records"],
             )
         gate = read_json(outputs["matrix_release_gate_report"])
         archive.finish({"outputs": outputs, "protocol_record_source": loaded["protocol_record_source"]},

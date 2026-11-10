@@ -71,6 +71,7 @@ class ProtocolOptimizationAgent:
     def load_protocol_artifacts(self, state: PipelineState) -> None:
         loaded = load_protocol_analysis_inputs(self.config.input_dir)
         state.protocol_records = loaded["protocol_records"]
+        state.raw_protocol_records = loaded["raw_protocol_records"]
         state.factor_events = loaded["factor_events"]
         state.source_identity_rows = loaded["source_identity_rows"]
         state.log_step(
@@ -91,7 +92,8 @@ class ProtocolOptimizationAgent:
             self.config.quality_filters,
             llm_client=build_llm_client(self.config.llm),
         )
-        state.protocol_outputs = agent.run(state.protocol_records, state.factor_events, state.source_identity_rows)
+        state.protocol_outputs = agent.run(state.protocol_records, state.factor_events, state.source_identity_rows,
+                                          raw_protocol_records=state.raw_protocol_records)
         state.log_step("analyze_protocol_factors", "ok", outputs=_stringify_paths(state.protocol_outputs))
 
     def analyze_h5ad_profiles(self, state: PipelineState) -> None:

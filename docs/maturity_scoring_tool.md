@@ -4,7 +4,7 @@
 
 - Core deterministic tool: `backend/protocol_optimization_agent/analysis/phenotype/maturity_scoring.py::compute_maturity_scores`.
 - Program loader: `load_maturity_programs` in the same module.
-- DA adapter: `agents/data_analysis.py`; Action Registry: `agents/actions.py`.
+- DA execution: `agents/data_analysis.py`; action/tool adapter: `agents/data_actions.py`; Action Registry: `agents/actions.py`.
 - Available action ID: `phenotype.beta_maturity` (existing ID), operation: `maturity`.
   This action also supports Alpha and Delta, not only Beta.
 - Provenance: extracted from the full counts-based pipeline of the owner's

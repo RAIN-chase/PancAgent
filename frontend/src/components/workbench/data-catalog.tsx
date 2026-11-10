@@ -36,6 +36,9 @@ export function DataCatalog({
   const [catalog, setCatalog] = useState<JsonObject>({});
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
+  const ready = rows(catalog.datasets).filter(
+    (row) => row.analysis_available === true,
+  );
   useEffect(() => {
     if (readOnly) return;
     const controller = new AbortController();
@@ -80,6 +83,22 @@ export function DataCatalog({
           {!catalog.configured && (
             <p className="wb-muted">服务器数据目录尚未配置</p>
           )}
+          <p className="wb-muted">
+            Protocol 比较无需 h5ad，使用已发布的 PA 结果。
+          </p>
+          {!!catalog.configured &&
+            !ready.some((row) => row.role !== "reference_atlas") && (
+              <p role="status">
+                表型分析缺少可用数据：请先注册并发布自己的
+                h5ad，或选择已就绪的公共数据。
+              </p>
+            )}
+          {!!catalog.configured &&
+            !ready.some((row) => row.role === "reference_atlas") && (
+              <p className="wb-muted">
+                参考图谱尚未就绪；无需参考图谱的分析不受影响。
+              </p>
+            )}
           {groups.map(([role, label]) => {
             const datasets = rows(catalog.datasets).filter(
               (row) => row.role === role,

@@ -1,5 +1,9 @@
 # Architecture Simplification Plan
 
+> Historical migration plan, not the current capability contract. Start with
+> [current architecture](current_project_architecture.md).
+
+
 本计划用于逐步整理现有项目。目标是方案评估、数据评估和可实验验证的假设交付；湿实验执行与反馈作为可选扩展。
 
 2026-10-06：第 1～3 步完成后，按后续请求依次实施第 4～8 步。下方目录已按现有职责落地，没有提前创建空计算模块。基线、变更边界和验收记录见 [首批执行记录](architecture_simplification_steps_1_3.md) 与 [后续执行记录](architecture_simplification_steps_4_8.md)。本计划的迁移映射保留旧路径，供核对使用；当前入口以执行记录和主架构文档为准。

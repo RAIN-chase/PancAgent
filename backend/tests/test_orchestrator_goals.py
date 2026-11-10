@@ -131,7 +131,7 @@ def test_duplicate_and_dependency_failure_do_not_block_independent_steps(tmp_pat
     graph, calls = execute(monkeypatch, [lookup(), lookup()])
     result = graph.invoke(state(tmp_path, steps=steps))
     assert len(calls) == 2
-    assert [record["status"] for record in result["step_results"]] == ["ok", "skipped_duplicate", "needs_clarification", "blocked_dependency", "ok"]
+    assert [record["status"] for record in result["step_results"]] == ["ok", "skipped_duplicate", "needs_clarification", "ok", "blocked_dependency"]
     assert sum(record["executed"] for record in result["step_results"]) == 2
     assert result["stop_reason"] == "evidence_insufficient"
 

@@ -38,7 +38,7 @@ def register_dataset(source: Path, storage: Path, registry: Path) -> dict:
                 if file_hash(target) != checksum:
                     raise ValueError("Existing dataset version was modified.")
             else:
-                os.link(staging, target)
+                os.replace(staging, target)
             staging.unlink(missing_ok=True)
             if target.stat().st_mode & stat.S_IWUSR:
                 target.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)

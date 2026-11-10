@@ -1,5 +1,6 @@
 """Run the existing PA graph on synthetic data without an LLM or API key."""
 
+import argparse
 from math import isclose
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from protocol_optimization_agent.runtime.io import read_csv_dicts, read_json
 def main() -> None:
     example_dir = Path(__file__).resolve().parent
     repository = example_dir.parents[1]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=repository / "runs" / "tutorial")
+    args = parser.parse_args()
 
     # The loader projects the formal JSONL into the PA's internal records/events.
     loaded = load_protocol_analysis_inputs(example_dir)
@@ -21,9 +25,10 @@ def main() -> None:
     # No client is supplied: ProtocolAnalysisAgent uses OfflineLLMClient.
     # The existing run decorator creates a fresh archive beneath this directory.
     outputs = ProtocolAnalysisAgent(
-        repository / "runs" / "tutorial",
+        args.output.resolve(),
         {"min_protocol_confidence": 0.65, "require_comparison_ready": True},
-    ).run(loaded["protocol_records"], loaded["factor_events"], loaded["source_identity_rows"])
+    ).run(loaded["protocol_records"], loaded["factor_events"], loaded["source_identity_rows"],
+          raw_protocol_records=loaded["raw_protocol_records"])
 
     matrix = {row["protocol_id"]: row for row in read_csv_dicts(outputs["protocol_feature_matrix"])}
     feature = "all_reagent_activin_a_max_concentration"

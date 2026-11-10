@@ -1,5 +1,9 @@
 # Architecture Simplification: Steps 1-3
 
+> Historical migration record. For current entrypoints and capabilities, use
+> [current architecture](current_project_architecture.md).
+
+
 本文保留首批变更时的事实与路径；后续第 4～8 步及当前模块位置见 [后续执行记录](architecture_simplification_steps_4_8.md)。
 
 日期：2026-10-06。本轮仅完成第 1～3 步，不迁移 runtime/science/interfaces，不改变数据库、实体身份、评分算法或科学门槛。工作区原有未提交修改保留；本轮没有执行 Git 提交。

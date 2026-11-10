@@ -75,6 +75,18 @@ assert not any(name.startswith('protocol_optimization_agent.extensions') for nam
     subprocess.run([sys.executable, "-c", code], cwd=PROJECT_ROOT, check=True, capture_output=True, text=True)
 
 
+def test_da_execution_and_action_adaptation_have_one_way_dependencies() -> None:
+    executor = import_module("protocol_optimization_agent.agents.data_analysis")
+    adapter = import_module("protocol_optimization_agent.agents.data_actions")
+    assert adapter.DataAnalysisAgent is executor.DataAnalysisAgent
+    assert not hasattr(executor, "data_analysis_agent")
+    assert not hasattr(executor, "execute_data_action")
+    tree = ast.parse((PACKAGE_ROOT / "agents/data_analysis.py").read_text(encoding="utf-8"))
+    assert not any(isinstance(node, ast.ImportFrom) and node.module ==
+                   "protocol_optimization_agent.agents.data_actions" for node in ast.walk(tree))
+    assert adapter.data_analysis_agent.name == "data_analysis_agent"
+
+
 def test_orchestrator_contains_no_domain_tools_or_calculations() -> None:
     source = (PACKAGE_ROOT / "agents/orchestrator.py").read_text(encoding="utf-8")
     tree = ast.parse(source)

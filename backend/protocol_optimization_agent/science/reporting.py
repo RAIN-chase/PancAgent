@@ -161,7 +161,7 @@ def ground_conclusions(proposals: list[dict[str, Any]], records: list[dict[str, 
         if any(metric.lower() not in metrics for metric in proposal["metrics"]):
             raise ValueError("Conclusion metrics are not supported by cited results")
         if proposal["evidence_level"] in {"fact", "descriptive"} and (
-            any(action in {"hypothesis.generate", "experiment.propose", "phenotype.differential_expression"} for action in actions)
+            any(action in {"hypothesis.generate", "experiment.propose", "phenotype.differential_expression", "data.exploratory_sensitivity"} for action in actions)
             or not actions):
             raise ValueError("Hypothesis, exploratory or historical evidence cannot be promoted to facts")
         if proposal["evidence_level"] in {"hypothesis", "exploratory"}:
@@ -203,6 +203,28 @@ def numeric_bindings(value: Any, ref: dict[str, Any], pointer: str = "") -> list
     return [{**ref, "field_path": pointer}]
 
 
+def result_dimensions(step: dict, result: dict) -> dict:
+    from protocol_optimization_agent.agents.analysis_flow import SUCCESS_STATUSES
+    validation = result.get("validation", {})
+    numeric_check = validation.get("scientific_checks", {}).get("numeric_recomputed")
+    no_numeric_task = step["action_id"] in {"protocol.lookup", "protocol.steps", "data.catalog", "scientific.state"}
+    numerical = "not_required" if no_numeric_task else "verified_by_reference" if numeric_check is True else "failed" if numeric_check is False else "not_independently_checked"
+    validity = list(validation.get("task_validity", {}).values())
+    scientific = "task_preconditions_checked" if validity and all(item.get("valid") for item in validity) else "requires_review"
+    if no_numeric_task:
+        scientific = "not_a_scientific_effect_assessment"
+    if validity and any(item.get("valid") is False for item in validity):
+        scientific = "task_preconditions_failed"
+    return {"step_id": step["step_id"], "action_id": step["action_id"],
+            "execution": "succeeded" if step.get("executed") and step.get("status") in SUCCESS_STATUSES else "failed" if step.get("executed") else "cached_or_skipped",
+            "numerical_correctness": numerical, "scientific_applicability": scientific,
+            "limitations": result.get("confidence_caveats", []), "result_ref": step.get("result_ref"),
+              "failure": step.get("failure"),
+              "independent_validation": {"reference_computation": "passed" if numeric_check is True else "failed" if numeric_check is False else "not_performed",
+                                         "expert_review": "not_assessed_by_orchestrator", "model_review_is_independent": False},
+            "policy": "Execution, numerical correctness, scientific applicability and question sufficiency are separate."}
+
+
 def build_final_report(state: dict[str, Any], root: Path) -> dict[str, Any]:
     sections: dict[str, list[dict[str, Any]]] = {
         name: []
@@ -228,7 +250,7 @@ def build_final_report(state: dict[str, Any], root: Path) -> dict[str, Any]:
             "hypotheses"
             if action in {"hypothesis.generate", "experiment.propose"}
             else "exploratory_associations"
-            if action == "phenotype.differential_expression"
+            if action == "data.exploratory_sensitivity" or action == "phenotype.differential_expression"
             and result.get("validation", {}).get("statistical_applicability", {}).get("differential_expression")
             == "exploratory_replicate_level"
             else "descriptive_differences"
@@ -266,12 +288,14 @@ def build_final_report(state: dict[str, Any], root: Path) -> dict[str, Any]:
         elif not sources and action.startswith("phenotype."):
             caveats.append("study_identity_unknown; independent_study_support_not_established")
     acceptance = assess_question(state["plan"], state.get("step_results", []), root)
+    dimensions = [result_dimensions(step, saved_result(step["result_ref"], root) if step.get("result_ref") else {})
+                  for step in state.get("step_results", [])]
     conclusions = state["plan"].get("conclusions", [])
     if not conclusions:
         ids = acceptance["supporting_result_ids"] or state["plan"].get("conclusion_refs", [])
         levels = {"lookup": "fact", "quality": "fact", "state": "fact", "catalog": "fact", "hypothesis": "hypothesis",
                   "endpoint_analysis": "descriptive", "protocol_comparison": "descriptive", "endpoint_comparison": "descriptive"}
-        if any(step["action_id"] == "phenotype.differential_expression" and step.get("result_ref", {}).get("result_id") in ids
+        if any(step["action_id"] in {"phenotype.differential_expression", "data.exploratory_sensitivity"} and step.get("result_ref", {}).get("result_id") in ids
                for step in state.get("step_results", []) if step.get("result_ref")):
             levels["endpoint_analysis"] = "exploratory"
         conclusions = [{"claim": "指定问题已有对应的工具证据。" if acceptance["answered"] else "当前证据尚不能完整回答指定问题。",
@@ -293,6 +317,7 @@ def build_final_report(state: dict[str, Any], root: Path) -> dict[str, Any]:
         "stop_reason": state["stop_reason"],
         "plan": state["plan"],
         "step_results": state.get("step_results", []),
+        "assessment_dimensions": {"steps": dimensions, "question_sufficiency": acceptance},
         "evidence_gaps": sorted(set([*state["plan"].get("evidence_gaps", []), *acceptance["unresolved_questions"]])),
         "acceptance": acceptance,
         "conclusions": conclusions,

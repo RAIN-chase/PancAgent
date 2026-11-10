@@ -1,5 +1,10 @@
 # Thin Orchestrator Refactor
 
+> Historical refactor record. DA action adaptation now lives in
+> `agents/data_actions.py`; use [current architecture](current_project_architecture.md)
+> for present responsibilities.
+
+
 Date: 2026-10-06.
 
 ## Execution Boundary

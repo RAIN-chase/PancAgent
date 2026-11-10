@@ -14,6 +14,7 @@ class PipelineState:
     input_paths: dict[str, Path] = field(default_factory=dict)
     missing_inputs: list[str] = field(default_factory=list)
     protocol_records: list[dict[str, Any]] = field(default_factory=list)
+    raw_protocol_records: list[dict[str, Any]] = field(default_factory=list)
     factor_events: list[dict[str, Any]] = field(default_factory=list)
     source_identity_rows: list[dict[str, Any]] = field(default_factory=list)
     h5ad_manifest: list[dict[str, Any]] = field(default_factory=list)

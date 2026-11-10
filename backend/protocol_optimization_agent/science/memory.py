@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING, Any
 from protocol_optimization_agent.runtime.access_control import AccessPolicy, authenticated_mode
 from protocol_optimization_agent.runtime.archive import atomic_json, file_hash
 from protocol_optimization_agent.science.identity import stable_id
-from protocol_optimization_agent.science.models import Evidence, ScientificInterpretation, ScientificRecord
+from protocol_optimization_agent.science.models import (
+    Evidence,
+    MethodExperience,
+    ScientificInterpretation,
+    ScientificRecord,
+)
 from protocol_optimization_agent.science.reporting import pointer_value, saved_result
 
 if TYPE_CHECKING:
@@ -19,6 +24,40 @@ if TYPE_CHECKING:
 ALIASES = (("maturity", "成熟度"), ("composition", "细胞组成"), ("expression", "表达量", "基因表达"),
            ("stress", "应激"), ("beta", "β细胞", "beta cell"))
 FILTERS = {"protocol_ids", "endpoints", "stages", "protocol_versions", "hypothesis_versions"}
+
+
+def method_design(request: dict) -> dict:
+    fields = ("operation", "endpoint", "scale", "sample_column", "replicate_column", "study_column", "group_column",
+              "groupby", "cell_type", "dataset_version", "expression_scale", "normalization", "batch_column", "paired")
+    return {key: request[key] for key in fields if request.get(key) not in (None, "", [], {})}
+
+
+def retrieve_method_experiences(db, requirements: dict, limit: int) -> list[dict]:
+    actions = requirements.get("actions", {})
+    if not actions:
+        return []
+    candidates = []
+    for (payload,) in db.execute("SELECT payload FROM records WHERE kind='method_experience' ORDER BY id"):
+        row = json.loads(payload)
+        if row["action_id"] not in actions:
+            continue
+        current = actions[row["action_id"]]
+        known = row.get("prerequisites", {})
+        mismatches = [key for key, value in current.get("design", {}).items() if key in known and known[key] != value]
+        if mismatches:
+            continue
+        checks = {"tool_version_matches": row["tool_version"] not in {"", "unknown"} and row["tool_version"] == current.get("tool_version"),
+                  "code_version_matches": row["code_version"] not in {"", "unknown"} and row["code_version"] == requirements.get("code_version"),
+                  "source_snapshot_intact": False}
+        try:
+            checks["source_snapshot_intact"] = all(file_hash(Path(ref["path"])) == ref["sha256"] for ref in row["source_refs"])
+        except (OSError, KeyError):
+            pass
+        row["reuse_assessment"] = {**checks, "status": "revalidate_required" if all(checks.values()) else "version_or_source_review_required",
+            "unverified_prerequisites": sorted(set(known) - set(current.get("design", {}))), "biological_fact": False}
+        candidates.append(row)
+    candidates.sort(key=lambda row: (row["reuse_assessment"]["status"] != "revalidate_required", row["id"]))
+    return candidates[:limit]
 
 
 def checked_lists(value: dict[str, Any], allowed: set[str]) -> dict[str, list[str]]:
@@ -248,6 +287,19 @@ def remember_report(store: ScientificWorldModel, report: dict[str, Any], root: P
     evidence_ids: dict[str, str] = {}
     records: list[ScientificRecord] = []
     for step in report["step_results"]:
+        if not step.get("result_ref") or not (step["action_id"].startswith("phenotype.") or step["action_id"] in {"data.assess", "data.exploratory_sensitivity", "protocol.compare", "protocol.assess"}):
+            continue
+        ref = step["result_ref"]
+        result = saved_result(ref, root)
+        request = ref.get("parameters", {}).get("request", {})
+        design = method_design(request)
+        records.append(MethodExperience(id=stable_id("method_experience", [store.context.run_id, ref["result_id"]]),
+            action_id=step["action_id"], tool_version=ref.get("tool_version", "unknown"), code_version=ref.get("code_version", "unknown"),
+            outcome="succeeded" if step.get("usable") else "partial" if step.get("status") == "partial" else "failed",
+            prerequisites=design, validation=result.get("validation", {}), failure_reasons=step.get("evidence_gaps", []),
+            source_refs=[{**{key: value for key, value in ref.items() if key != "parameters"}, "path": str(root / ref["path"])}], originating_run_id=store.context.run_id,
+            limitations=[*result.get("confidence_caveats", []), "A successful execution does not establish applicability to new inputs."]))
+    for step in report["step_results"]:
         if not step.get("usable") or not step.get("result_ref") or not step["action_id"].startswith(("protocol.", "phenotype.", "data.")):
             continue
         ref = step["result_ref"]
@@ -256,7 +308,8 @@ def remember_report(store: ScientificWorldModel, report: dict[str, Any], root: P
         evidence_ids[ref["result_id"]] = eid
         records.append(Evidence(id=eid, kind="protocol" if step["action_id"].startswith("protocol.") and step["action_id"] != "protocol.phenotype_compare" else "phenotype",
             source_refs=[{**ref, "path": str(root / ref["path"])}], run_id=store.context.run_id, trace_id=report["trace_id"],
-            quality="passed", observations={"classification": "tool_observation", "action_id": step["action_id"],
+            quality="passed", observations={"classification": "exploratory_tool_observation" if result.get("evidence_level") == "exploratory" else "tool_observation", "action_id": step["action_id"],
+                "evidence_level": result.get("evidence_level", "tool_observation"), "promotion_status": result.get("promotion_status", "not_applicable"),
                 "result_ref": ref, "validation": result.get("validation", {}), "policy": "Observed tool output, not an established causal fact."}))
     for claim in report["conclusions"]:
         citations = [*claim["supporting_refs"], *claim["opposing_refs"]]

@@ -103,6 +103,9 @@ def compute_maturity_scores(row: dict[str, Any], h5ad_config: dict[str, Any],
         import numpy as np
         import scanpy as sc
         from scipy import sparse
+
+        from protocol_optimization_agent.analysis.phenotype.method_provenance import maturity_method_package
+        audit["method_package"] = maturity_method_package(sc.tl.score_genes, params)
     except ImportError as exc:
         return failure("dependency_missing", str(exc))
     try:

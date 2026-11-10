@@ -1,5 +1,9 @@
 # Architecture Simplification: Steps 4-8
 
+> Historical migration record. For current entrypoints and capabilities, use
+> [current architecture](current_project_architecture.md).
+
+
 日期：2026-10-06。接续 [第 1～3 步](architecture_simplification_steps_1_3.md)，按顺序完成模块迁移、计算提取、接口统一、实验扩展隔离和回归。保留工作区原有修改，本轮未提交 Git。
 
 ## Step 4: Runtime And Scientific State

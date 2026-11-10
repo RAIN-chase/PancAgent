@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from protocol_optimization_agent.runtime.llm_client import LLMClient, OfflineLLMClient
 from protocol_optimization_agent.science.identity import stable_id
 
-VERSION = "mechanism-hypotheses-v1"
+VERSION = "mechanism-hypotheses-v2"
 
 
 class LiteratureQuery(BaseModel):
@@ -25,6 +25,16 @@ class QueryPlan(BaseModel):
     queries: list[LiteratureQuery] = Field(min_length=1, max_length=2)
 
 
+class DiscriminatingTest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    alternative_index: int = Field(ge=0)
+    endpoint: str
+    matched_comparison: str = Field(min_length=1)
+    mechanism_prediction: Literal["higher", "lower", "no_change"]
+    alternative_prediction: Literal["higher", "lower", "no_change"]
+    limitations: list[str] = Field(min_length=1)
+
+
 class MechanismInterpretation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     mechanism_explanation: str = Field(min_length=1)
@@ -35,6 +45,22 @@ class MechanismInterpretation(BaseModel):
     falsification_conditions: list[str] = Field(min_length=1, max_length=6)
     expected_direction: Literal["higher", "lower", "unknown"] = "unknown"
     endpoint_expectations: dict[str, Literal["higher", "lower", "unknown"]] = Field(default_factory=dict)
+    discriminating_tests: list[DiscriminatingTest] = Field(default_factory=list, max_length=6)
+
+
+def audit_literature_scope(record: dict, observations: list[dict]) -> dict:
+    scope = record.get("applicability") if isinstance(record.get("applicability"), dict) else {}
+    aliases = {"cell_type": ("cell_type", "cell_population", "lineage"), "stage": ("stage", "stage_id"),
+               "dose": ("dose", "concentration"), "endpoint": ("endpoint", "raw_endpoint")}
+    checks = {}
+    for field, keys in aliases.items():
+        value = scope.get(field, record.get("endpoint") if field == "endpoint" else None)
+        declared = {str(item).strip().casefold() for item in (value if isinstance(value, list) else [value]) if item not in (None, "", "unknown")}
+        actual = {str((row if key in row else row.get("context", {})).get(key)).strip().casefold()
+                  for row in observations for key in keys if (row if key in row else row.get("context", {})).get(key) not in (None, "", "unknown")}
+        checks[field] = "unknown" if not declared or not actual else "mismatched" if not declared & actual else "matched" if declared == actual else "overlapping_heterogeneous_scope"
+    return {"checks": checks, "status": "mismatched" if "mismatched" in checks.values() else "scope_review_required" if any(value != "matched" for value in checks.values()) else "declared_fields_match",
+            "quote_entailment": "not_independently_verified", "policy": "Exact metadata matching is not expert mechanism validation."}
 
 
 def _literature_record(raw: dict[str, Any], origin: str) -> dict[str, Any]:
@@ -51,7 +77,8 @@ def _literature_record(raw: dict[str, Any], origin: str) -> dict[str, Any]:
     if raw.get("stance", "uncertain") not in {"supports", "opposes", "uncertain"}:
         raise ValueError("Unknown literature stance.")
     row = {key: raw.get(key) for key in ("feature", "endpoint", "pmid", "doi", "url", "title", "quote",
-                                       "applicability", "publication_types", "retrieved_at_utc")}
+                                       "applicability", "publication_types", "retrieved_at_utc", "source_location", "license", "source_level")}
+    row["source_level"] = "abstract" if origin == "retrieved_abstract" else raw.get("source_level", "provided_excerpt")
     row.update({"stance": raw.get("stance", "uncertain"), "source_origin": origin,
                 "stance_source": "unclassified_retrieval" if origin == "retrieved_abstract" else "provided_classification_requires_review",
                 "quality": "unverified_applicability", "evidence_kind": "mechanism_literature"})
@@ -136,6 +163,12 @@ def interpret_mechanisms(candidates: list[dict[str, Any]], package: dict[str, An
                 "A factorial or time-matched control separates the proposed intervention from the competing explanation."],
             "expected_direction": "unknown", "endpoint_expectations": {endpoint: "unknown" for endpoint in sorted(endpoints)},
             "claim_type": "unvalidated_hypothesis", "numeric_predictions": None}
+        scoped = [{"source_id": row["id"], **audit_literature_scope(row, observations)} for row in relevant]
+        item["literature_applicability"] = scoped
+        mismatched = {row["source_id"] for row in scoped if row["status"] == "mismatched"}
+        item["scope_mismatched_refs"] = [row for row in relevant if row["id"] in mismatched]
+        for field in ("supporting_evidence_refs", "opposing_evidence_refs"):
+            item[field] = [row for row in item[field] if row["id"] not in mismatched]
         if online and calls < max_calls and observations and relevant:
             try:
                 model_input = {
@@ -149,6 +182,11 @@ def interpret_mechanisms(candidates: list[dict[str, Any]], package: dict[str, An
                     interpretation = MechanismInterpretation.model_validate(response)
                     if not set(interpretation.endpoint_expectations).issubset(endpoints):
                         raise ValueError("Unknown endpoint in mechanism expectations.")
+                    if (set(interpretation.supporting_literature_ids) | set(interpretation.opposing_literature_ids)) & mismatched:
+                        raise ValueError("Scope-mismatched literature is retained but cannot directly support or refute the proposed mechanism")
+                    for test in interpretation.discriminating_tests:
+                        if test.endpoint not in endpoints or test.alternative_index >= len(interpretation.alternative_explanations) or test.mechanism_prediction == test.alternative_prediction:
+                            raise ValueError("Discriminating test must bind an existing alternative and endpoint with different conditional predictions")
                     ids = {row["id"] for row in relevant}
                     if not (set(interpretation.supporting_literature_ids) | set(interpretation.opposing_literature_ids)).issubset(ids):
                         raise ValueError("Unknown literature citation.")
@@ -180,6 +218,11 @@ def interpret_mechanisms(candidates: list[dict[str, Any]], package: dict[str, An
         item["competing_explanations"] = [
             {"type": "intervention_mechanism", "statement": item["mechanism_explanation"], "status": "unvalidated"},
             *[{"type": "alternative", "statement": text, "status": "unresolved"} for text in item["alternative_explanations"]]]
+        item.setdefault("discriminating_tests", [])
+        item["distinguishability_status"] = "conditional_test_proposals_require_review" if item["discriminating_tests"] else "not_established"
+        item["assessment_axes"] = {"mechanism_plausibility": "independent_review_required",
+                                   "observational_association": "descriptive_only" if candidate.get("endpoint_associations") else "not_available",
+                                   "experimental_feasibility": "not_assessed_by_literature_adapter"}
         results.append(item)
     return {"schema_version": VERSION, "evidence_package_id": package["id"], "interpretations": results,
             "literature": list({row["id"]: row for row in records}.values()), "queries": log, "errors": errors,

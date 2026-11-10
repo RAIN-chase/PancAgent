@@ -46,6 +46,13 @@ export type SavedResult = {
   ref: JsonObject;
 };
 export type Snapshot = { results: SavedResult[]; reports: JsonObject[] };
+export const resultKey = (result: SavedResult) =>
+  JSON.stringify([
+    result.runId,
+    result.id,
+    result.ref.input_version,
+    result.ref.sha256,
+  ]);
 export const object = (value: unknown): JsonObject =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonObject)
@@ -80,6 +87,43 @@ export function pointer(value: unknown, path: string): unknown {
       if (Object.hasOwn(obj, key)) return obj[key];
       throw new Error("引用的字段未载入");
     }, value);
+}
+export function resolveEvidence(
+  results: SavedResult[],
+  runId: string,
+  citation: JsonObject,
+) {
+  const ref = object(citation.result_ref ?? citation);
+  if (citation.source_type && citation.source_type !== "result")
+    return { error: "历史来源不在当前载入的结果中" };
+  const id = text(citation.source_id ?? ref.result_id);
+  if (
+    !runId ||
+    !id ||
+    !ref.sha256 ||
+    !ref.input_version ||
+    (ref.result_id && ref.result_id !== id) ||
+    [citation.run_id, ref.run_id].some((value) => value && value !== runId)
+  )
+    return { error: "引用缺少版本或哈希，或运行范围不匹配" };
+  const candidates = results.filter(
+    (item) => item.runId === runId && item.id === id,
+  );
+  const result = candidates.find(
+    (item) =>
+      item.ref.sha256 === ref.sha256 &&
+      item.ref.input_version === ref.input_version,
+  );
+  if (!result)
+    return {
+      error: candidates.length ? "输入版本或哈希不匹配" : "引用结果未载入",
+    };
+  const path = text(citation.field_path);
+  try {
+    return { result, path, value: pointer(result.value, path) };
+  } catch {
+    return { error: "引用字段未载入" };
+  }
 }
 export function snapshot(messages: unknown[]): Snapshot {
   const results: SavedResult[] = [],
@@ -116,7 +160,7 @@ export function snapshot(messages: unknown[]): Snapshot {
   }
   return {
     results: [
-      ...new Map(results.map((result) => [result.id, result])).values(),
+      ...new Map(results.map((result) => [resultKey(result), result])).values(),
     ],
     reports,
   };

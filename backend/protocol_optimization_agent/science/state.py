@@ -18,6 +18,7 @@ from protocol_optimization_agent.science.models import (
     ExperimentFeedback,
     FeedbackAdmission,
     Hypothesis,
+    MethodExperience,
     PhenotypeState,
     ProtocolState,
     ScientificInterpretation,
@@ -35,6 +36,7 @@ RECORD_TYPES = {
     "analysis_dataset": AnalysisDataset,
     "analysis_result": AnalysisResult,
     "interpretation": ScientificInterpretation,
+    "method_experience": MethodExperience,
 }
 SCIENTIFIC_STAGES = {
     "S0": "Evidence ingestion",
@@ -217,10 +219,13 @@ class ScientificWorldModel:
             admissions = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records WHERE kind='feedback_admission' ORDER BY id")]
         return stable_id("feedback", {"experiments": [row for row in payloads if row["status"] != "PROPOSED"], "admissions": admissions})
 
-    def reasoning_context(self, question: str | None = None, limit: int = 8, *, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+    def reasoning_context(self, question: str | None = None, limit: int = 8, *, filters: dict[str, Any] | None = None,
+                          method_requirements: dict[str, Any] | None = None) -> dict[str, Any]:
         if not 1 <= limit <= 20:
             raise ValueError("Planning history limit must be between 1 and 20.")
         with self._connect() as db:
+            from protocol_optimization_agent.science.memory import retrieve_method_experiences
+            methods = retrieve_method_experiences(db, method_requirements or {}, limit)
             phrases = re.findall(r"\bprotocol\s+[A-Za-z0-9_.-]+\b", question or "", re.I)
             terms = list(dict.fromkeys(term.lower() for term in [*phrases,
                 *re.findall(r"[A-Za-z][A-Za-z0-9_.-]{1,63}|[\u4e00-\u9fff]{2,16}", question or "")]
@@ -246,6 +251,7 @@ class ScientificWorldModel:
                 for h in hypotheses
             ],
             "interpretations": interpretations,
+            "method_experiences": methods,
             "feedback_fingerprint": self.feedback_fingerprint(),
             "admitted_feedback": admissions,
             "previous_analysis_result": ({key: json.loads(previous[0])["record"].get(key) for key in ("id", "version", "objective", "analysis_dataset_id")}

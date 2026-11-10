@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 from protocol_optimization_agent.agents import data_analysis as da
+from protocol_optimization_agent.agents.data_actions import data_analysis_agent
 from protocol_optimization_agent.agents.data_analysis import (
     TASK_OUTPUTS,
     DataAnalysisAgent,
-    data_analysis_agent,
     resolve_data_tasks,
 )
 from protocol_optimization_agent.analysis.phenotype.external_tools import get_external_data_analysis_tools

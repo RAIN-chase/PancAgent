@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from protocol_optimization_agent.agents import orchestrator
 from protocol_optimization_agent.agents.actions import get_action, select_action, validate_action_arguments
-from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent, data_analysis_agent
+from protocol_optimization_agent.agents.data_actions import data_analysis_agent
+from protocol_optimization_agent.agents.data_analysis import DataAnalysisAgent
 from protocol_optimization_agent.analysis.phenotype.maturity_scoring import (
     CELL_TYPES,
     compute_maturity_scores,
